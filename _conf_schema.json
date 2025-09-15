@@ -1,0 +1,48 @@
+{
+  "ts_host": {
+    "description": "TeamSpeak服务器主机",
+    "type": "string",
+    "default": "127.0.0.1"
+  },
+  "ts_port": {
+    "description": "TeamSpeak服务器端口",
+    "type": "int",
+    "default": 10011
+  },
+  "ts_username": {
+    "description": "ServerQuery用户名",
+    "type": "string",
+    "default": ""
+  },
+  "ts_password": {
+    "description": "ServerQuery密码",
+    "type": "string",
+    "default": ""
+  },
+  "ts_server_id": {
+    "description": "虚拟服务器ID",
+    "type": "int",
+    "default": 1
+  },
+  "ts_client_nickname": {
+    "description": "客户端昵称",
+    "type": "string",
+    "default": "AstrBot TS Monitor"
+  },
+  "ts_log_level": {
+    "description": "日志级别",
+    "type": "string",
+    "default": "INFO",
+    "options": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+  },
+  "ts_event_merge_time": {
+    "description": "事件合并时间",
+    "type": "int",
+    "default": 5
+  },
+  "notification_umo_list": {
+    "description": "通知群组umo (通过 /sid 获取)",
+    "type": "list",
+    "default": []
+  }
+}
