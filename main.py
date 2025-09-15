@@ -1,17 +1,25 @@
+# 标准库
 import asyncio
 from collections import defaultdict
-from typing import Optional
+from typing import AsyncGenerator, Optional
 
+# 第三方库（ts_async_api）
 from ts_async_api.server_query.client import Client, ServerStatus
-from ts_async_api.server_query.event import EventBase
-from ts_async_api.server_query.event.notifycliententerview import ClientEnterEvent
-from ts_async_api.server_query.event.notifyclientleftview import ClientLeftEventBase
-from ts_async_api.server_query.event.notifyclientmoved import ClientMovedEventBase
+from ts_async_api.server_query.event import (
+    ClientEnterEvent,
+    ClientLeftEventBase,
+    ClientMovedEventBase,
+    EventBase,
+)
 from ts_async_api.server_query.exception import CmdException
 from ts_async_api.server_query.utils import init_logger
 
-from astrbot.api import AstrBotConfig, logger  # 使用 astrbot 提供的 logger 接口
-from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+# 项目内部模块（astrbot）
+from astrbot.api import (
+    AstrBotConfig,
+    logger,
+)
+from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star, register
 
@@ -301,7 +309,15 @@ class TeamSpeakBotPlugin(Star):
             logger.warning("Only Responding request on notification list.")
         else:
             await self.send_message(status_text, umo=[umo] if umo else None)
+        event.call_llm = True
         # yield event.plain_result(status_text)
+
+    @filter.llm_tool(name="query_teamspeak_status")
+    async def get_ts_status_llm(self, event: AstrMessageEvent):
+        """你可以使用此工具查询 TeamSpeak （或者称之为语音频道、语音）服务器在线的用户列表以及用户的频道。图标"😴"和"📢"后面是频道的名称。"-"后面是用户的 id。"""
+        logger.warning("LLM Tool: query_teamspeak_status called.")
+        status_text = await self.get_ts_status()
+        return status_text
 
     async def terminate(self):
         """插件终止"""
