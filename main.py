@@ -1,7 +1,7 @@
 # 标准库
 import asyncio
 from collections import defaultdict
-from typing import AsyncGenerator, Optional
+from typing import Optional
 
 # 第三方库（ts_async_api）
 from ts_async_api.server_query.client import Client, ServerStatus
@@ -19,7 +19,7 @@ from astrbot.api import (
     AstrBotConfig,
     logger,
 )
-from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
 from astrbot.api.star import Context, Star, register
 
@@ -47,7 +47,9 @@ class ClientStatusChangeEventCtx:
         self.background_tasks = set()
         self.plugin: Optional[TeamSpeakBotPlugin] = None
 
-    async def report_event(self, event: ClientEnterEvent | ClientMovedEventBase):
+    async def report_event(
+        self, event: ClientEnterEvent | ClientMovedEventBase
+    ) -> None:
         """
         报告事件：延迟后输出日志通知
         该方法会在延迟EVENT_MERGE_TIME秒后执行实际的日志输出
@@ -69,6 +71,9 @@ class ClientStatusChangeEventCtx:
                 ].channel_name
                 # 记录进入服务器的通知日志，包括昵称、IP、频道和客户端版本
                 message_text = f"用户 {client_info.client_nickname} ({client_info.connection_client_ip}), 加入频道: {channel_name}, 客户端版本: {client_info.client_version}"
+                await self.plugin.send_message(
+                    message_text=message_text, no_ignore=self.plugin.ts_enter
+                )
         # 处理客户端移动频道事件
         else:
             # 从服务器状态中获取客户端信息
@@ -83,10 +88,11 @@ class ClientStatusChangeEventCtx:
                 ].channel_name
                 # 记录频道切换的通知日志
                 message_text = f"用户 {client_info.client_nickname} ({client_info.connection_client_ip}), 从频道 {old_channel_name} 切换到频道 {new_channel_name}"
-        logger.info(message_text)
+                await self.plugin.send_message(
+                    message_text=message_text, no_ignore=self.plugin.ts_move
+                )
         if not self.plugin:
             raise RuntimeError("TeamSpeak plugin reference is None")
-        await self.plugin.send_message(message_text)
 
         # 从事件映射中移除该客户端的事件
         del self.event_map[event.clid]
@@ -98,22 +104,17 @@ class ClientStatusChangeEventCtx:
         客户端进入服务器事件的回调函数
         检查事件是否已存在于映射中，如果不存在则创建报告任务
         :param client: 客户端对象（未使用）
-        :param event: 事件对象，必须是ClientEnterEvent类型
-        :return: False，表示不阻止事件传播
+        :param event: 事件对象, 必须是ClientEnterEvent类型
+        :return: False, 表示不阻止事件传播
         """
-        # 断言事件类型正确
-        assert isinstance(event, ClientEnterEvent)
+        if not isinstance(event, ClientEnterEvent):
+            return True
         # 如果该客户端ID的事件尚未记录
         if event.clid not in self.event_map:
-            # 记录事件到映射
             self.event_map[event.clid] = event
-            # 创建异步任务来报告事件
             task = asyncio.create_task(self.report_event(event))
-            # 添加任务到后台任务集合
             self.background_tasks.add(task)
-            # 当任务完成时，从集合中移除
             task.add_done_callback(self.background_tasks.discard)
-        # 返回False，继续事件处理
         return False
 
     async def client_moved_callback(self, client: Client, event: EventBase) -> bool:
@@ -121,11 +122,11 @@ class ClientStatusChangeEventCtx:
         客户端移动频道事件的回调函数
         类似于进入回调，检查并创建报告任务
         :param client: 客户端对象（未使用）
-        :param event: 事件对象，必须是ClientMovedEventBase类型
-        :return: False，表示不阻止事件传播
+        :param event: 事件对象, 必须是ClientMovedEventBase类型
+        :return: False, 表示不阻止事件传播
         """
-        # 断言事件类型正确
-        assert isinstance(event, ClientMovedEventBase)
+        if not isinstance(event, ClientMovedEventBase):
+            return True
         # 如果该客户端ID的事件尚未记录
         if event.clid not in self.event_map:
             self.event_map[event.clid] = event
@@ -141,33 +142,35 @@ class ClientStatusChangeEventCtx:
         客户端离开服务器事件的回调函数
         直接输出离开通知日志，不使用事件合并
         :param client: 客户端对象
-        :param event: 事件对象，必须是ClientLeftEventBase类型
-        :return: False，表示不阻止事件传播
+        :param event: 事件对象, 必须是ClientLeftEventBase类型
+        :return: False, 表示不阻止事件传播
         """
-        # 断言事件类型正确
-        assert isinstance(event, ClientLeftEventBase)
+        # 检查事件类型
+        if not isinstance(event, ClientLeftEventBase):
+            return True
         client_info = client.server_status.client_list[event.clid]
         channel_name = client.server_status.channel_list[client_info.cid].channel_name
-        # 记录离开服务器的通知日志
         message_text = f"用户 {client_info.client_nickname} ({client_info.connection_client_ip}), 从频道: {channel_name} 离开"
         logger.info(message_text)
         if not self.plugin:
             raise RuntimeError("TeamSpeak plugin reference is None")
-        await self.plugin.send_message(message_text)
+        await self.plugin.send_message(
+            message_text=message_text, no_ignore=self.plugin.ts_left
+        )
         return False
 
 
 @register(
     "astrbot_plugin_teamspeakbot",
-    "nextpage",
+    "Next-Page-Vi, plusls, Linkin-Lab-Server",
     "teamspeak 服务器变动通知插件",
-    "1.0.0",
-    "https://github.com/Next-Page-Vi/ts-async-api",
+    "1.1.0",
+    "https://github.com/Linkin-Lab-Server/astrbot_plugin_teamspeakbot",
 )
 class TeamSpeakBotPlugin(Star):
     """插件主入口"""
 
-    def __init__(self, context: Context, config: AstrBotConfig):
+    def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.ctx: Optional[ClientStatusChangeEventCtx] = None
         self.ts_task = None
@@ -179,13 +182,16 @@ class TeamSpeakBotPlugin(Star):
         self.notification_umo_list: list[str] = (
             self.config.get("notification_umo_list") or []
         )
-        self.event_merge_time: int = self.config.get("ts_event_merge_time") or 0
-        self.client_nickname: str = (
-            self.config.get("ts_client_nickname") or "AstrBot TS Monitor"
-        )
+        self.event_merge_time: int = self.config.get("ts_event_merge_time") or 10
+        self.client_nickname: str = self.config.get("ts_client_nickname") or "AstrBot"
         self.log_level = self.config.get("ts_log_level", "INFO")
+        self.ts_enter = self.config["notification_level"].get("ts_enter", True)
+        self.ts_left = self.config["notification_level"].get("ts_left", True)
+        self.ts_move = self.config["notification_level"].get("ts_move", True)
 
-    async def send_message(self, message_text: str, umo: Optional[list[str]] = None):
+    async def send_message(
+        self, message_text: str, umo: Optional[list[str]] = None, no_ignore: bool = True
+    ) -> None:
         """发送消息到指定的统一消息源"""
         if umo is not None:
             target_umo_list = umo
@@ -194,31 +200,29 @@ class TeamSpeakBotPlugin(Star):
         message_chain = MessageChain(chain=[Plain(message_text)])
         for group_umo in target_umo_list:
             try:
+                logger.info(f"Build message to group {group_umo}: {message_chain}")
+                if not no_ignore:
+                    logger.info("---Message ignored---")
+                    continue
                 await self.context.send_message(group_umo, message_chain)
-                logger.info(f"Sent message to group {group_umo}: {message_chain}")
             except Exception as e:
                 logger.error(
                     f"Failed to send message to {group_umo}: {type(e).__name__}: {e}"
                 )
 
-    async def initialize(self):
-        """插件初始化，启动TS连接循环"""
+    async def initialize(self) -> None:
+        """插件初始化"""
         logger.info("Starting TeamSpeakBotPlugin...")
-        if not all(
-            [
-                self.username,
-                self.password,
-                self.event_merge_time,
-            ]
-        ):
+        if not all(bool(x) for x in [self.host, self.username, self.password]):
             logger.error(
-                "Plugin not fully configured, plugin will not connect until reloaded."
+                "Not fully configured, plugin will not connect until reloaded."
             )
+            await self.terminate()
             return
         self.ts_task = asyncio.create_task(self.ts_connection_loop())
 
-    async def ts_connection_loop(self):
-        """TS连接循环，支持重连"""
+    async def ts_connection_loop(self) -> None:
+        """连接循环, 支持重连"""
         while True:
             try:
                 logger.info("开始连接到 teamspeak 服务器...")
@@ -247,10 +251,8 @@ class TeamSpeakBotPlugin(Star):
         async with await Client.new(self.host, self.port) as client:
             version = await client.server_version()
             logger.info(
-                f"Teamspeaker server version: {version.version}.{version.build}, platform: {version.platform}"
+                f"Teamspeaker server version: {version.version}.{version.build}, platform: {version.platform}."
             )
-            message_text = f"连接到 teamspeak 服务器, 版本: {version.version}.{version.build}, 等待连接初始化..."
-            await self.send_message(message_text)
             await client.login(self.username, self.password)
             await client.use(1, virtual=True, client_nickname=self.client_nickname)
             await asyncio.sleep(3)
@@ -267,16 +269,15 @@ class TeamSpeakBotPlugin(Star):
             client.event_manager.register(
                 ClientMovedEventBase, self.ctx.client_moved_callback
             )
-            logger.info("teamspeak 连接已初始化")
-            message_text = "teamspeak 连接已初始化"
-            await self.send_message(message_text)
-            # 需要调用 wait, 不然里头的 task 出异常了不会向外抛出
+            logger.info("Teamspeak connection initialized.")
+            # Need to call wait() to ensure that exceptions in the inner tasks are propagated outward.
             await client.wait()
 
     async def get_ts_status(self) -> str:
         """查询TS服务器状态"""
         if not self.ctx or not self.ctx.server_status:
-            return "teamspeak 连接未初始化"
+            await self.connect_to_ts()
+            return "teamspeak 连接未初始化, 已开始重载, 请稍后再试..."
         client_list = self.ctx.server_status.client_list
         filtered_clients = [  # 排除自己
             info
@@ -302,24 +303,42 @@ class TeamSpeakBotPlugin(Star):
         return status_text
 
     @filter.command("ts")
-    async def ts(self, event: AstrMessageEvent):
+    async def ts(self, event: AstrMessageEvent) -> None:
         status_text = await self.get_ts_status()
         umo = event.unified_msg_origin
         if umo not in self.notification_umo_list:
             logger.warning("Only Responding request on notification list.")
         else:
-            await self.send_message(status_text, umo=[umo] if umo else None)
+            await self.send_message(
+                message_text=status_text, umo=[umo] if umo else None
+            )
         event.call_llm = True
         # yield event.plain_result(status_text)
 
     @filter.llm_tool(name="query_teamspeak_status")
     async def get_ts_status_llm(self, event: AstrMessageEvent):
-        """你可以使用此工具查询 TeamSpeak （或者称之为语音频道、语音）服务器在线的用户列表以及用户的频道。图标"😴"和"📢"后面是频道的名称。"-"后面是用户的 id。"""
-        logger.warning("LLM Tool: query_teamspeak_status called.")
+        """
+        **工具名称**: query_teamspeak_status
+        **功能描述**:
+        通过调用 `query_teamspeak_status` 工具查询 TeamSpeak 语音服务器的在线用户列表及其所在频道，并根据用户问题生成简洁、自然的中文回答。工具返回的数据包含以下三种行：
+        - **在线客户端总数**：格式为“当前在线客户端数: X”。
+        - **频道信息**：以图标开头，"📢"表示活跃频道，"😴 AFK"表示空闲（离开）频道，频道名称紧随其后。
+        - **用户信息**：格式为“- 昵称 (ID)”，ID 通常为 IP 地址，但格式可能不严格。
+        你的任务是解析返回的 `status_text`，动态分析用户问题（`event.message`），提取相关信息，并生成符合中文语境的回答。特别注意用户昵称的模糊匹配需求，并支持可能的中文别名（如通过上下文推断），在有歧义时提示用户进一步确认。
+        **关键要求**:
+        1. **数据解析**:
+           - 提取在线客户端总数、频道名称（区分 📢 和 😴 AFK）及用户列表（昵称和 ID）。
+           - 使用正则表达式或字符串分割，确保解析准确无误。
+        2. **模糊匹配用户昵称**:
+           - 支持部分匹配（忽略大小写）。
+           - 支持可能的中文别名，通过上下文推断。
+           - 如果昵称有歧义（多个用户匹配），列出所有匹配用户的状态，并提示用户。
+        """
+        logger.info("LLM Tool: query_teamspeak_status called.")
         status_text = await self.get_ts_status()
         return status_text
 
-    async def terminate(self):
+    async def terminate(self) -> None:
         """插件终止"""
         if self.ts_task:
             self.ts_task.cancel()
