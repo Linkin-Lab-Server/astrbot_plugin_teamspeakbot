@@ -8,62 +8,6 @@
 - 自动重连：断线立即作废快照，重新同步成功后恢复查询和通知。
 - 自定义文本：支持事件、通知外层、在线状态和频道列表模板。
 
-插件不依赖 LLM，不提供语音接入、聊天转发或服务器管理功能。
-
-## 安装与首次使用
-
-### 运行条件
-
-- **Python 3.12 或更高版本**：插件及固定版本的 `ts-async-api` 均有此要求；请检查 AstrBot 实际使用的解释器。
-- AstrBot，建议使用最新稳定版。当前未在 `metadata.yaml` 声明 AstrBot 版本范围，也未验证所有历史版本。
-- 可访问的 TeamSpeak **TCP ServerQuery** 服务及账号。默认端口为 `10011`，不是语音端口；当前连接实现不支持 SSH、TLS 或 HTTP Query。
-- 要接收动态通知，所用 AstrBot 平台适配器必须支持主动消息发送。支持命令回复不代表支持后台推送。
-
-### 安装插件
-
-在 AstrBot WebUI 的插件管理中，选择通过仓库地址安装：
-
-```text
-https://github.com/Linkin-Lab-Server/astrbot_plugin_teamspeakbot
-```
-
-AstrBot 通过插件根目录的 `requirements.txt` 安装运行依赖。依赖固定到 Git 提交，安装环境需要 Git，并能访问 GitHub。插件的 `pyproject.toml` 和 `uv.lock` 用于本仓库开发环境，不替代 AstrBot 的依赖安装入口。
-
-手动部署时，将仓库放入 `AstrBot/data/plugins/astrbot_plugin_teamspeakbot`，把 `requirements.txt` 安装到 **AstrBot 实际运行的 Python 环境**，然后重载插件或重启 AstrBot。例如，AstrBot 使用根目录下的 `.venv` 时，在 AstrBot 根目录执行：
-
-```sh
-uv pip install --python .venv/bin/python -r data/plugins/astrbot_plugin_teamspeakbot/requirements.txt
-```
-
-Windows 应改用实际的解释器路径，例如 `.venv\Scripts\python.exe`。Docker 部署需在 AstrBot 容器内安装；宿主机上的 Python 环境不会自动供容器使用。
-
-### 完成配置
-
-1. 打开插件配置页，填写 TeamSpeak 主机、ServerQuery 账号和密码；按需修改端口与虚拟服务器 ID。
-2. 在目标群聊或私聊发送 AstrBot 内置命令 `/sid`，复制返回的 **UMO**，加入 `notification.targets`。不要填写 UID、单独的群号或 UMO 展示别名。
-3. 保存配置并重载插件。首次安装时账号密码默认为 `null`，填写前不会启动 TeamSpeak 连接。
-4. 等待日志出现 `TeamSpeak initial synchronization completed`，在允许的会话发送 `/ts`。
-5. 让一个语音客户端加入或移动频道，等待通知窗口到期，验证主动推送。
-
-下列 JSON 展示必需配置，其余字段使用默认值。请替换示例账号和 UMO：
-
-```json
-{
-  "teamspeak_server": {
-    "host": "ts.example.com",
-    "username": "query-monitor",
-    "password": "替换为 ServerQuery 密码"
-  },
-  "notification": {
-    "targets": ["my-bot:GroupMessage:123456789"]
-  }
-}
-```
-
-UMO 的结构是 `平台实例 ID:消息类型:会话 ID`，以 `/sid` 的实际输出为准。插件按完整字符串匹配；开启会话隔离或变更平台实例后，应重新获取 UMO。加载时会检查三部分均非空、没有首尾空白，且消息类型是 AstrBot 支持的 `GroupMessage`、`FriendMessage` 或 `OtherMessage`。会话 ID 可以包含冒号。格式错误会阻止连接启动，日志会标明 `notification.targets` 和从 0 开始的列表索引；平台实例是否存在及目标能否投递仍需实际验证。
-
-ServerQuery 账号需能执行 `login`、`use`、`servernotifyregister`、`channellist`、`clientlist`、`clientinfo` 和 `version`，并订阅服务器及全部频道事件。IP 是否可见取决于账号权限。Docker 内的 `127.0.0.1` 指向容器自身，请填写容器实际能访问的 TeamSpeak 地址。
-
 ## 查询与访问控制
 
 | 操作或状态 | 行为 |
@@ -81,7 +25,7 @@ ServerQuery 账号需能执行 `login`、`use`、`servernotifyregister`、`chann
 
 ## 配置参考
 
-在 WebUI 编辑配置，保存并重载插件后生效。不要修改 `_conf_schema.json` 来填写账号；它定义配置界面和默认值。AstrBot 将实际配置保存在 `data/config/<plugin_name>_config.json`。
+在 WebUI 编辑配置，保存并重载插件后生效。
 
 ### 连接
 
@@ -96,8 +40,6 @@ ServerQuery 账号需能执行 `login`、`use`、`servernotifyregister`、`chann
 | `teamspeak_server.log_level` | `INFO` | 协议命令日志级别：`DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` |
 | `connection_policy.reconnect_interval` | `5` | 普通重连间隔，正整数秒 |
 | `connection_policy.banned_retry_interval` | `120` | 错误码 `3329` 的重试间隔，正整数秒 |
-
-`secret: true` 只遮罩 WebUI 中的密码显示，不加密配置文件。默认状态和事件模板会展示用户 IP；不需要时可从模板中移除 `{ip}`。
 
 ### 通知
 
@@ -170,55 +112,3 @@ WebUI 多行文本框直接输入换行，JSON 中使用 `\n`。用 `{{` 和 `}}
 不支持属性访问、索引、转换及非空格式说明符，例如 `{nickname.name}`、`{nickname[0]}`、`{nickname!r}`、`{nickname:>10}`。`{nickname:}` 与 `{nickname}` 等价。空白文本、未知变量或语法错误会使该项回退默认模板并记录警告，其他有效模板继续生效；模板层的回退不改写已保存的配置。
 
 模板值必须为字符串。注意 AstrBot 会先整理配置：`null` 可能被替换成 Schema 默认值，未知模板键可能在进入插件前被移除；只有实际传到插件的非法类型才会导致校验失败。关闭通知请使用开关。
-
-## 从旧版升级到 2.0
-
-2.0 使用新的配置结构，不提供语义迁移。升级前备份原配置，升级后在 WebUI 重新核对账号、目标会话、窗口、事件开关和模板。
-
-旧窗口字段、`change`、`visit` 及访问模板不再使用；当前只注册 `/ts` 命令，不再提供旧版的 LLM 查询工具。AstrBot 会根据新 Schema 删除不存在的字段、补齐默认值，因此旧配置可能被清理后以新默认值启动，不能依赖“旧字段必然报错”来判断迁移是否完成。直接调用插件配置解析器时，残留的未知配置字段则会被拒绝。
-
-## 排查问题
-
-| 现象 | 检查方式 |
-| --- | --- |
-| 安装失败或缺少模块 | 确认 Python 3.12+、Git 可用、依赖安装在 AstrBot 的运行环境中；检查 GitHub 访问和安装日志 |
-| 插件显示已加载，但无连接日志 | 查找 `TeamSpeak configuration rejected`；修正日志给出的配置路径，保存并重载 |
-| `/ts` 没有回复 | 检查 AstrBot 前缀、白名单、插件启用范围和命令冲突 |
-| `/ts` 提示无权查询 | 核对完整 UMO 是否在 `notification.targets`，并检查配置是否通过校验 |
-| 一直提示尚未连接 | 检查 TCP ServerQuery 地址、端口、账号、虚拟服务器 ID 和权限；`3329` 表示封禁，按封禁间隔重试 |
-| 查询正常，但没有通知 | 检查通知及事件开关、窗口归并结果、UMO 格式和平台主动消息能力；查看发送异常或 `returned False` 日志 |
-| 短暂进入或来回移动没有通知 | 同一窗口内没有净变化时会抵消，属于预期行为 |
-| IP 或客户端版本显示“未知” | 检查地址查看权限；客户端已离开或补充查询失败时也可能拿不到信息 |
-
-## 开发与兼容性核对
-
-在本仓库目录使用 uv：
-
-```sh
-uv sync --locked
-uv run ruff format .
-uv run ruff check .
-uv run pytest -q
-```
-
-`main.py` 负责 AstrBot 生命周期、命令和主动消息边界；`core/client.py` 管理 ServerQuery 连接与传输任务；`core/event_handler.py` 维护快照；`core/message_manager.py` 负责通知窗口；配置、模板和事件类型位于其余 `core` 模块中。
-
-测试覆盖配置、模板、允许名单、生命周期、事件归并以及模拟 ServerQuery 服务。连接集成测试需要绑定 `127.0.0.1` 临时端口。AstrBot 接口在现有单元测试中被替换为测试对象，测试通过不等同于完成真实平台投递验证；部署后仍需检查连接、命令、推送和重载。
-
-2026-09-13 对照官方文档及 [AstrBot 上游源码 `bd046ed`](https://github.com/AstrBotDevs/AstrBot/tree/bd046ed29914ee559e9bf47676ccb71a84f747ba) 核对：继承 `Star` 自动注册、`initialize()` / `terminate()` 生命周期、`@filter.command`、`event.plain_result()`、`Context.send_message()` 和当前配置 Schema 均仍受支持，无需补回已废弃的 `@register` 装饰器。
-
-插件及核心模块统一通过 `astrbot.api.logger` 输出日志，在支持独立插件日志的 AstrBot 版本中遵循本插件的日志级别设置。查看协议命令调试日志时，需要同时将 `teamspeak_server.log_level` 和 AstrBot 中本插件的日志级别设为 `DEBUG`；协议配置的其他级别均不输出命令调试日志，不影响连接错误日志。命令日志只记录命令名，不记录账号密码等参数。
-
-核对依据：
-
-- [插件开发入口与依赖管理](https://docs.astrbot.app/dev/star/plugin-new.html)
-- [最小插件实例](https://docs.astrbot.app/dev/star/guides/simple.html)
-- [消息事件与命令](https://docs.astrbot.app/dev/star/guides/listen-message-event.html)
-- [主动与被动消息发送](https://docs.astrbot.app/dev/star/guides/send-message.html)
-- [插件配置与 Schema 更新](https://docs.astrbot.app/dev/star/guides/plugin-config.html)
-
-## 依赖、致谢与许可
-
-连接层使用 [ts-async-api](https://github.com/Next-Page-Vi/ts-async-api) 的协议编解码，固定到提交 `c30e24a7c26ab26aaff74a4307594c596190550c`；插件自行管理连接任务和顺序事件处理。通知窗口设计参考 [Minecraft QueQiao Lite](https://github.com/Next-Page-Vi/astrbot_plugin_queqiao_lite)。
-
-项目采用 [GNU AGPLv3](LICENSE) 许可。
