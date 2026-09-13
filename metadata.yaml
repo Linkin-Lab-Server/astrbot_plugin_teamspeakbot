@@ -1,5 +1,5 @@
 name: astrbot_plugin_teamspeakbot
-desc: teamspeak 服务器变动通知插件
-version: v1.1.0 
+desc: TeamSpeak 在线状态查询与状态变动合并通知
+version: v2.0.0
 author: Next-Page-Vi, plusls, Linkin-Lab-Server
-repo: https://github.com/Linkin-Lab-Server/astrbot_plugin_teamspeakbot # 插件的仓库地址
+repo: https://github.com/Linkin-Lab-Server/astrbot_plugin_teamspeakbot

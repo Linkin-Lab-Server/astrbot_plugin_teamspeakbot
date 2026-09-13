@@ -1,76 +1,173 @@
 {
-    "ts_host": {
-        "description": "TeamSpeak服务器主机",
-        "type": "string",
-        "default": "127.0.0.1"
-    },
-    "ts_port": {
-        "description": "TeamSpeak服务器端口",
-        "type": "int",
-        "default": 10011
-    },
-    "ts_username": {
-        "description": "ServerQuery用户名",
-        "type": "string",
-        "default": ""
-    },
-    "ts_password": {
-        "description": "ServerQuery密码",
-        "type": "string",
-        "default": ""
-    },
-    "ts_server_id": {
-        "description": "虚拟服务器ID",
-        "type": "int",
-        "default": 1
-    },
-    "ts_client_nickname": {
-        "description": "客户端昵称",
-        "type": "string",
-        "default": "AstrBot TS Monitor"
-    },
-    "ts_log_level": {
-        "description": "日志级别",
-        "type": "string",
-        "default": "INFO",
-        "options": [
-            "DEBUG",
-            "INFO",
-            "WARNING",
-            "ERROR",
-            "CRITICAL"
-        ]
-    },
-    "ts_event_merge_time": {
-        "description": "事件合并时间",
-        "type": "int",
-        "hint": "单位：秒，防止短时间内大量事件通知刷屏，让你的群友红温",
-        "default": 10
-    },
-    "notification_level": {
-        "description": "通知级别",
+    "teamspeak_server": {
+        "description": "TeamSpeak 连接",
         "type": "object",
         "items": {
-            "ts_enter": {
-                "description": "进入服务器通知",
-                "type": "bool",
-                "default": true
+            "host": {
+                "description": "服务器主机",
+                "type": "string",
+                "default": "127.0.0.1"
             },
-            "ts_left": {
-                "description": "离开服务器通知",
-                "type": "bool",
-                "default": true
+            "port": {
+                "description": "ServerQuery 端口",
+                "type": "int",
+                "default": 10011
             },
-            "ts_move": {
-                "description": "频道间移动通知",
-                "type": "bool",
-                "default": true
+            "username": {
+                "description": "ServerQuery 用户名（必填）",
+                "type": "string",
+                "default": null
+            },
+            "password": {
+                "description": "ServerQuery 密码（必填）",
+                "type": "string",
+                "default": null,
+                "secret": true
+            },
+            "server_id": {
+                "description": "虚拟服务器 ID",
+                "type": "int",
+                "default": 1
+            },
+            "client_nickname": {
+                "description": "监控客户端昵称",
+                "type": "string",
+                "default": "AstrBot TS Monitor"
+            },
+            "log_level": {
+                "description": "连接协议日志级别",
+                "type": "string",
+                "default": "INFO",
+                "hint": "DEBUG 开启命令名调试日志，同时需在 AstrBot 中将本插件日志级别设为 DEBUG；其他选项不输出命令调试日志，不影响连接错误日志。",
+                "options": [
+                    "DEBUG",
+                    "INFO",
+                    "WARNING",
+                    "ERROR",
+                    "CRITICAL"
+                ]
             }
         }
     },
-    "notification_umo_list": {
-        "description": "通知群组umo (通过 /sid 获取)",
-        "type": "list",
-        "default": []
+    "connection_policy": {
+        "description": "重连策略",
+        "type": "object",
+        "items": {
+            "reconnect_interval": {
+                "description": "普通重连间隔（秒，正整数）",
+                "type": "int",
+                "default": 5
+            },
+            "banned_retry_interval": {
+                "description": "封禁重试间隔（秒，正整数）",
+                "type": "int",
+                "default": 120
+            }
+        }
+    },
+    "notification": {
+        "description": "通知",
+        "type": "object",
+        "items": {
+            "enabled": {
+                "description": "启用通知",
+                "type": "bool",
+                "default": true,
+                "hint": "关闭后不记录通知；不影响 /ts 查询。"
+            },
+            "targets": {
+                "description": "通知和 /ts 查询允许的 UMO",
+                "type": "list",
+                "default": [],
+                "hint": "填写 /sid 返回的完整 UMO：平台实例 ID:消息类型:会话 ID；加载时校验格式，各部分不得为空或带首尾空白。空列表禁止查询与推送。"
+            },
+            "window": {
+                "description": "全局合并窗口",
+                "type": "object",
+                "items": {
+                    "quiet_seconds": {
+                        "description": "安静时长（秒）",
+                        "type": "int",
+                        "default": 10,
+                        "hint": "非负整数；0 表示下一次每秒检查时发送。"
+                    },
+                    "max_seconds": {
+                        "description": "最大等待时长（秒）",
+                        "type": "int",
+                        "default": 60,
+                        "hint": "整数，必须大于安静时长；非法配置阻止连接启动，保留配置入口。从窗口首个事件固定计时。"
+                    }
+                }
+            },
+            "events": {
+                "description": "通知的变动事件",
+                "type": "object",
+                "items": {
+                    "enter": {
+                        "description": "进入",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "left": {
+                        "description": "离开",
+                        "type": "bool",
+                        "default": true
+                    },
+                    "move": {
+                        "description": "移动",
+                        "type": "bool",
+                        "default": true
+                    }
+                }
+            }
+        }
+    },
+    "message_templates": {
+        "description": "消息模板（保存并重载后生效）",
+        "type": "object",
+        "items": {
+            "enter": {
+                "description": "进入事件",
+                "type": "text",
+                "default": "{nickname} ({ip}) 加入频道 {channel}，客户端版本：{client_version}。",
+                "hint": "允许变量：{channel}, {client_version}, {ip}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+            },
+            "left": {
+                "description": "离开事件",
+                "type": "text",
+                "default": "{nickname} ({ip}) 从频道 {channel} 离开了。",
+                "hint": "允许变量：{channel}, {client_version}, {ip}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。 channel 为本用户窗口起始频道。"
+            },
+            "move": {
+                "description": "移动事件",
+                "type": "text",
+                "default": "{nickname} ({ip}) 从频道 {from_channel} 切换到频道 {to_channel}。",
+                "hint": "允许变量：{client_version}, {from_channel}, {ip}, {nickname}, {to_channel}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+            },
+            "change_batch": {
+                "description": "状态变动消息外层",
+                "type": "text",
+                "default": "{messages}",
+                "hint": "允许变量：{messages}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+            },
+            "status": {
+                "description": "在线状态",
+                "type": "text",
+                "default": "当前在线客户端数：{online_count}\n{channels}",
+                "hint": "允许变量：{channels}, {online_count}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+            },
+            "status_channel": {
+                "description": "频道行",
+                "type": "text",
+                "default": "{channel_icon} {channel}\n{clients}",
+                "hint": "允许变量：{channel}, {channel_icon}, {clients}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+            },
+            "status_client": {
+                "description": "客户端行",
+                "type": "text",
+                "default": "  - {nickname} ({ip})",
+                "hint": "允许变量：{ip}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+            }
+        }
     }
 }
