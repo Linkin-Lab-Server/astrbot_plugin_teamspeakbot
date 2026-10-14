@@ -1,6 +1,6 @@
 [project]
 name = "astrbot-plugin-teamspeakbot"
-version = "2.1.0"
+version = "2.1.1"
 requires-python = ">=3.12"
 dependencies = ["ts-async-api", "httpx>=0.28.1,<1", "aiofiles>=25.1.0,<26"]
 

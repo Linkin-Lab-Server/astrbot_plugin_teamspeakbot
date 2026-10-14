@@ -36,9 +36,6 @@ class Templates:
             logger.warning("message_templates.%s: unknown template; ignoring it", key)
         for key, default in DEFAULT_TEMPLATES.items():
             value = custom.get(key, default)
-            # Upgrade only exact old defaults; keep intentional custom IP templates.
-            if "{location}" in default and value == default.replace("{location}", "{ip}"):
-                value = default
             try:
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError("template must not be blank")

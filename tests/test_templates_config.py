@@ -71,12 +71,35 @@ def test_online_templates_and_empty_server():
 
 
 @pytest.mark.parametrize("key", ["enter", "left", "move", "status_client"])
-def test_exact_old_default_upgrades_without_changing_custom_mapping(key):
+def test_explicit_ip_template_is_preserved_even_when_equal_to_old_default(key):
     original = DEFAULT_TEMPLATES[key].replace("{location}", "{ip}")
     custom = {key: original}
     templates = Templates(custom)
-    assert templates._parts[key] == Templates({})._parts[key]
+    user = User(UidIdentity(uuid4(), "uid"), "Next_Page", "8.8.8.8", "3.6", "广东省 深圳")
+    channel = Channel(1, "铁拳发射基地（正在开庭）")
+    destination = Channel(2, "捣蛋猫（位于广州站）")
+    match key:
+        case "enter":
+            text = templates.event(Enter(user, channel))
+        case "left":
+            text = templates.event(Left(user, channel))
+        case "move":
+            text = templates.event(Move(user, channel, destination))
+        case "status_client":
+            text = templates.status(Ready((OnlineClient(user, channel),)))
+    assert "Next_Page (8.8.8.8)" in text
+    assert "广东省 深圳" not in text
     assert custom == {key: original}
+
+
+def test_status_client_template_does_not_change_event_messages():
+    user = User(UidIdentity(uuid4(), "uid"), "Alice", "8.8.8.8", "3.6", "广东省 深圳")
+    channel = Channel(1, "A")
+    custom = Templates({"status_client": "查询用户：{nickname} [{ip}]"})
+    default = Templates({})
+    assert "查询用户：Alice [8.8.8.8]" in custom.status(Ready((OnlineClient(user, channel),)))
+    for event in (Enter(user, channel), Left(user, channel), Move(user, channel, Channel(2, "B"))):
+        assert custom.event(event) == default.event(event)
 
 
 def test_default_messages_show_location_and_custom_templates_can_show_ip():

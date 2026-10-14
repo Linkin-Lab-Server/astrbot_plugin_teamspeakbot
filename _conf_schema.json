@@ -1,20 +1,23 @@
 {
     "teamspeak_server": {
         "description": "TeamSpeak 连接",
+        "hint": "填写服务器的 TCP ServerQuery 连接信息。配置保存后需重载插件才能生效。",
         "type": "object",
         "items": {
             "host": {
-                "description": "服务器主机",
+                "description": "服务器地址",
                 "type": "string",
-                "default": "127.0.0.1"
+                "default": "127.0.0.1",
+                "hint": "填写 AstrBot 可访问的服务器 IP 或域名。"
             },
             "port": {
                 "description": "ServerQuery 端口",
                 "type": "int",
-                "default": 10011
+                "default": 10011,
+                "hint": "TCP ServerQuery 端口，通常为 10011，范围为 1–65535。"
             },
             "username": {
-                "description": "ServerQuery 用户名（必填）",
+                "description": "ServerQuery 账号（必填）",
                 "type": "string",
                 "default": null
             },
@@ -30,15 +33,16 @@
                 "default": 1
             },
             "client_nickname": {
-                "description": "监控客户端昵称",
+                "description": "监控机器人昵称",
                 "type": "string",
-                "default": "AstrBot TS Monitor"
+                "default": "AstrBot TS Monitor",
+                "hint": "机器人在 TeamSpeak 中显示的名称。"
             },
             "log_level": {
-                "description": "连接协议日志级别",
+                "description": "连接调试日志",
                 "type": "string",
                 "default": "INFO",
-                "hint": "DEBUG 开启命令名调试日志，同时需在 AstrBot 中将本插件日志级别设为 DEBUG；其他选项不输出命令调试日志，不影响连接错误日志。",
+                "hint": "通常保持 INFO。排查连接问题时选择 DEBUG，并将 AstrBot 中本插件的日志级别设为 DEBUG。",
                 "options": [
                     "DEBUG",
                     "INFO",
@@ -50,71 +54,75 @@
         }
     },
     "connection_policy": {
-        "description": "重连策略",
+        "description": "自动重连",
         "type": "object",
         "items": {
             "reconnect_interval": {
-                "description": "普通重连间隔（秒，正整数）",
+                "description": "断线重试间隔（秒）",
                 "type": "int",
-                "default": 5
+                "default": 5,
+                "hint": "连接失败或断开后，等待多久再次连接。填写大于 0 的整数。"
             },
             "banned_retry_interval": {
-                "description": "封禁重试间隔（秒，正整数）",
+                "description": "封禁重试间隔（秒）",
                 "type": "int",
-                "default": 120
+                "default": 120,
+                "hint": "查询账号被服务器封禁后，等待多久再次连接。填写大于 0 的整数。"
             }
         }
     },
     "notification": {
-        "description": "通知",
+        "description": "动态通知与查询权限",
         "type": "object",
         "items": {
             "enabled": {
-                "description": "启用通知",
+                "description": "启用动态通知",
                 "type": "bool",
                 "default": true,
-                "hint": "关闭后不记录通知；不影响 /ts 查询。"
+                "hint": "发送用户进入、离开和切换频道的通知。关闭后，允许的会话仍可使用 /ts 查询。"
             },
             "targets": {
-                "description": "通知和 /ts 查询允许的 UMO",
+                "description": "允许的会话",
                 "type": "list",
                 "default": [],
-                "hint": "填写 /sid 返回的完整 UMO：平台实例 ID:消息类型:会话 ID；加载时校验格式，各部分不得为空或带首尾空白。空列表禁止查询与推送。"
+                "hint": "在目标群聊或私聊发送 /sid，每项填写返回的完整会话标识（UMO）。这些会话可接收通知并使用 /ts 查询；列表为空时关闭查询与推送。"
             },
             "window": {
-                "description": "全局合并窗口",
+                "description": "通知合并",
+                "hint": "将短时间内的多次变动合并为一条通知，只展示开始到结束的变化。",
                 "type": "object",
                 "items": {
                     "quiet_seconds": {
-                        "description": "安静时长（秒）",
+                        "description": "变化结束后的等待时间（秒）",
                         "type": "int",
                         "default": 10,
-                        "hint": "非负整数；0 表示下一次每秒检查时发送。"
+                        "hint": "最后一次变动后等待多久发送通知；有新变动时重新计时。填写非负整数，0 表示下次检查时发送。"
                     },
                     "max_seconds": {
-                        "description": "最大等待时长（秒）",
+                        "description": "最长合并等待时间（秒）",
                         "type": "int",
                         "default": 60,
-                        "hint": "整数，必须大于安静时长；非法配置阻止连接启动，保留配置入口。从窗口首个事件固定计时。"
+                        "hint": "从第一次变动开始计时，达到此时长后发送通知。填写整数，必须大于变化结束后的等待时间。"
                     }
                 }
             },
             "events": {
-                "description": "通知的变动事件",
+                "description": "通知类型",
+                "hint": "选择要发送的变动类型，按合并后的结果判断。",
                 "type": "object",
                 "items": {
                     "enter": {
-                        "description": "进入",
+                        "description": "用户进入",
                         "type": "bool",
                         "default": true
                     },
                     "left": {
-                        "description": "离开",
+                        "description": "用户离开",
                         "type": "bool",
                         "default": true
                     },
                     "move": {
-                        "description": "移动",
+                        "description": "用户切换频道",
                         "type": "bool",
                         "default": true
                     }
@@ -123,50 +131,51 @@
         }
     },
     "message_templates": {
-        "description": "消息模板（保存并重载后生效）",
+        "description": "消息模板",
+        "hint": "分别设置动态通知和 /ts 查询的文字格式。支持换行，用 {{ 和 }} 显示花括号；留空或填写无效模板时使用默认值。保存后重载插件生效。",
         "type": "object",
         "items": {
             "enter": {
-                "description": "进入事件",
+                "description": "进入通知",
                 "type": "text",
                 "default": "{nickname} ({location}) 加入频道 {channel}，客户端版本：{client_version}。",
-                "hint": "允许变量：{channel}, {client_version}, {ip}, {location}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "hint": "可用变量：{nickname} 昵称、{location} 地域、{ip} IP 地址、{client_version} 客户端版本、{channel} 最终进入的频道。"
             },
             "left": {
-                "description": "离开事件",
+                "description": "离开通知",
                 "type": "text",
                 "default": "{nickname} ({location}) 从频道 {channel} 离开了。",
-                "hint": "允许变量：{channel}, {client_version}, {ip}, {location}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。 channel 为本用户窗口起始频道。"
+                "hint": "可用变量：{nickname} 昵称、{location} 地域、{ip} IP 地址、{client_version} 客户端版本、{channel} 合并开始时所在的频道。"
             },
             "move": {
-                "description": "移动事件",
+                "description": "切换频道通知",
                 "type": "text",
                 "default": "{nickname} ({location}) 从频道 {from_channel} 切换到频道 {to_channel}。",
-                "hint": "允许变量：{client_version}, {from_channel}, {ip}, {location}, {nickname}, {to_channel}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "hint": "可用变量：{nickname} 昵称、{location} 地域、{ip} IP 地址、{client_version} 客户端版本、{from_channel} 起始频道、{to_channel} 最终频道。"
             },
             "change_batch": {
-                "description": "状态变动消息外层",
+                "description": "合并通知格式",
                 "type": "text",
                 "default": "{messages}",
-                "hint": "允许变量：{messages}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "hint": "{messages} 表示合并后的通知内容。可在前后添加标题或其他文字。"
             },
             "status": {
-                "description": "在线状态",
+                "description": "/ts：查询回复",
                 "type": "text",
                 "default": "当前在线客户端数：{online_count}\n{channels}",
-                "hint": "允许变量：{channels}, {online_count}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "hint": "可用变量：{online_count} 在线用户数、{channels} 有在线用户的频道列表。"
             },
             "status_channel": {
-                "description": "频道行",
+                "description": "/ts：每个频道的格式",
                 "type": "text",
                 "default": "{channel_icon} {channel}\n{clients}",
-                "hint": "允许变量：{channel}, {channel_icon}, {clients}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "hint": "可用变量：{channel_icon} 频道图标、{channel} 频道名称、{clients} 该频道的在线用户列表。"
             },
             "status_client": {
-                "description": "客户端行",
+                "description": "/ts：每位用户的格式",
                 "type": "text",
                 "default": "  - {nickname} ({location})",
-                "hint": "允许变量：{ip}, {location}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "hint": "查询结果中每位在线用户的展示文字。可用变量：{nickname} 昵称、{location} 地域、{ip} IP 地址。"
             }
         }
     }
