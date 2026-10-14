@@ -6,6 +6,7 @@ import pytest
 
 from core.client import QueryConnection, TeamSpeakClient
 from core.config import ConnectionPolicy, NotificationConfig, ServerConfig
+from core.location import LocationResolver
 from core.message_manager import MessageManager
 from core.templates import Templates
 from core.types import Disconnected, Left, Ready
@@ -84,14 +85,20 @@ class FakeServer:
 
 
 @asynccontextmanager
-async def running_client(*, log_level="INFO", **kwargs):
+async def running_client(*, log_level="INFO", locations=None, **kwargs):
     fake = FakeServer(**kwargs)
     server = await asyncio.start_server(fake.accept, "127.0.0.1", 0)
     messages = MessageManager(
-        NotificationConfig(targets=["bot:GroupMessage:target"], window={"quiet_seconds": 0}),
+        NotificationConfig.model_validate(
+            {"targets": ["bot:GroupMessage:target"], "window": {"quiet_seconds": 0}}
+        ),
         Templates({}),
         AsyncMock(return_value=True),
     )
+    if locations is None:
+        locations = AsyncMock(spec=LocationResolver)
+        locations.resolve.return_value = None
+        locations.resolve_many.return_value = {}
     client = TeamSpeakClient(
         ServerConfig(
             host="127.0.0.1",
@@ -103,6 +110,7 @@ async def running_client(*, log_level="INFO", **kwargs):
         ),
         ConnectionPolicy(reconnect_interval=1, banned_retry_interval=2),
         messages,
+        locations,
     )
     task = asyncio.create_task(client.run(), name="teamspeak:test-service")
     try:
@@ -127,6 +135,61 @@ async def test_initial_sync_server_id_and_protocol_client_filter():
         assert client.state.clients[0].user.nickname == "Alice"
         assert any(b"use sid=7 " in command for command in fake.commands)
         assert any(b"clientlist -uid -ip -info" in command for command in fake.commands)
+        assert messages.window is None
+
+
+async def test_snapshot_and_live_events_include_location_without_query_client_lookups():
+    locations = AsyncMock(spec=LocationResolver)
+    locations.resolve.return_value = "北京市 北京"
+    queried = []
+
+    async def resolve_many(values):
+        queried.extend(values)
+        return {"8.8.8.8": "浙江省 杭州"}
+
+    locations.resolve_many.side_effect = resolve_many
+    async with running_client(locations=locations) as (fake, client, messages):
+        fake.client_rows = (
+            b"clid=1 cid=1 client_type=0 client_nickname=Alice client_unique_identifier=uid "
+            b"connection_client_ip=8.8.8.8|"
+            b"clid=2 cid=1 client_type=1 connection_client_ip=8.8.4.4"
+        )
+        await wait_until(lambda: isinstance(client.state, Ready))
+        assert queried == ["8.8.8.8"]
+        assert client.state.clients[0].user.location == "浙江省 杭州"
+        assert messages.window is None
+        await fake.emit(b"notifyclientmoved clid=1 ctid=2")
+        await wait_until(lambda: messages.window is not None)
+        await messages.flush_due()
+        text = messages.send.call_args.args[1]
+        assert "浙江省 杭州" in text and "8.8.8.8" not in text
+        await fake.emit(
+            b"notifycliententerview clid=9 ctid=1 client_type=0 "
+            b"client_unique_identifier=visitor connection_client_ip=8.8.4.4"
+        )
+        await wait_until(lambda: len(client.state.clients) == 2)
+        assert client.state.clients[1].user.location == "北京市 北京"
+        locations.resolve.assert_awaited_once_with("8.8.4.4")
+
+
+async def test_disconnect_during_location_lookup_cancels_sync():
+    locations = AsyncMock(spec=LocationResolver)
+    started, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def resolve_many(values):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    locations.resolve_many.side_effect = resolve_many
+    async with running_client(locations=locations) as (fake, client, messages):
+        await asyncio.wait_for(started.wait(), 1)
+        fake.peers[-1].close()
+        await wait_until(lambda: client.connection is None)
+        assert cancelled.is_set()
+        assert isinstance(client.state, Disconnected)
         assert messages.window is None
 
 
@@ -342,6 +405,7 @@ async def test_long_response_with_split_delimiter(monkeypatch):
     connection = QueryConnection(lambda: None)
     await connection.open("test-host", 10011)
     try:
+        assert connection.reader is not None
         payload = b"x" * (128 * 1024)
         connection.reader.feed_data(payload + b"\n")
         await asyncio.sleep(0)
@@ -452,7 +516,10 @@ async def test_stop_during_failed_connection_cleanup_clears_reference(monkeypatc
     )
     messages = MessageManager(NotificationConfig(), Templates({}), AsyncMock())
     client = TeamSpeakClient(
-        ServerConfig(username="admin", password="test"), ConnectionPolicy(), messages
+        ServerConfig(username="admin", password="test"),
+        ConnectionPolicy(),
+        messages,
+        AsyncMock(spec=LocationResolver),
     )
     running = asyncio.create_task(client.run())
     try:

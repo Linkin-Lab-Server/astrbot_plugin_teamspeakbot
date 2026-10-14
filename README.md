@@ -2,7 +2,8 @@
 
 通过 TeamSpeak ServerQuery 维护在线客户端和频道快照，在 AstrBot 会话中查询状态，并合并推送用户进入、离开和切换频道的动态。
 
-- `/ts`：按频道列出在线语音客户端、昵称和 IP，不计入 ServerQuery 客户端。
+- `/ts`：按频道列出在线语音客户端、昵称和地域，不计入 ServerQuery 客户端。
+- IP 地域：使用 IPWhois 异步查询，按完整 IPv4 / IPv6 地址缓存并持久化到插件数据目录。
 - 动态通知：合并连续变化，只发送窗口起点到终点的净变化。
 - 访问控制：指定哪些会话可以查询状态、接收通知。
 - 自动重连：断线立即作废快照，重新同步成功后恢复查询和通知。
@@ -19,7 +20,7 @@
 | `notification.enabled = false` | 停止记录和发送动态通知，允许会话仍可查询 |
 | `notification.targets = []` | 所有会话均不能查询，也不发送通知 |
 
-`/ts` 读取本地维护的快照，不会临时发起 ServerQuery 查询。空服务器显示在线客户端数为 `0`；空频道不展示。昵称、IP、客户端版本缺失时显示“未知”，频道名缺失时显示频道 ID。当前没有单独处理客户端改名事件，昵称通常在重新进入或重新同步后更新。
+`/ts` 读取本地维护的快照，不会临时发起 ServerQuery 或地域查询。空服务器显示在线客户端数为 `0`；空频道不展示。昵称、地域、IP、客户端版本缺失时显示“未知”，频道名缺失时显示频道 ID。当前没有单独处理客户端改名事件，昵称通常在重新进入或重新同步后更新。
 
 文中命令使用默认 `/` 前缀；如果 AstrBot 修改了唤醒前缀或命令配置，请使用对应触发方式。AstrBot 自身的白名单、插件启用范围和平台权限也会影响命令是否到达本插件。
 
@@ -40,6 +41,24 @@
 | `teamspeak_server.log_level` | `INFO` | 协议命令日志级别：`DEBUG`、`INFO`、`WARNING`、`ERROR`、`CRITICAL` |
 | `connection_policy.reconnect_interval` | `5` | 普通重连间隔，正整数秒 |
 | `connection_policy.banned_retry_interval` | `120` | 错误码 `3329` 的重试间隔，正整数秒 |
+
+### IP 地域与持久化缓存
+
+地域查询固定使用 [IPWhois](https://ipwhois.io/documentation) 的 `https://ipwho.is/{ip}` 接口，通过 HTTPX 异步请求中文结果，不提供自定义 API 配置。查询会将客户端公网 IP 发送给该服务；缺失、非法及非公网地址不会发起请求。
+
+国内显示省、市，国外补充国家，重复名称去重；名称沿用接口结果，不追加运营商。服务推断的是 IP 归属地域，不保证与用户实际所在地一致。查询失败或没有有效地域时显示“未知”，不会自动展示 IP。
+
+首次同步按唯一 IP 批量查询，最多同时请求 4 个地址，整体等待最多 3 秒。实时进入事件在取得 IP 后，地域查询最多等待 3 秒。超时取消未完成请求，已成功取得的结果保留；移动和离开沿用捕获的地域。查询失败不会导致 TeamSpeak 重连。
+
+缓存通过 `aiofiles` 异步保存于 AstrBot 实际数据目录下的 `plugin_data/astrbot_plugin_teamspeakbot/location_cache.json`，目录通过 `StarTools.get_data_dir()` 获取，符合 [AstrBot 插件存储规范](https://docs.astrbot.app/dev/star/guides/storage.html)。缓存不放在插件源码目录，重连、重载及重启后可复用。
+
+- IPv4 和 IPv6 均按完整地址缓存，不按网段推断其他地址的地域；IPv6 等价写法使用同一规范化键。
+- 成功结果没有时间有效期；临时失败缓存 10 分钟，再次遇到该 IP 时可重试。最多保留 2,048 项，超过容量按最近使用顺序淘汰。
+- HTTP 429 按有效的 `Retry-After` 暂停新查询，缺失或无效时暂停 24 小时；暂停状态也会保存。
+- 缓存变更合并后通常在 1 秒内异步落盘，文件写入耗时另计；使用同目录临时文件原子替换，停用和重载时完成最后一次保存。
+- 文件损坏或读写失败会记录警告，当前实例继续使用内存缓存，后续变更重新尝试保存。
+
+要强制刷新地域，请先关闭插件，删除上述缓存文件，再打开插件。缓存由插件运行时管理，无需手动编辑。Docker 部署需持久化 AstrBot 的数据目录，才能在容器重建后保留缓存。
 
 ### 通知
 
@@ -84,23 +103,23 @@
 
 | 模板键 | 可用变量 |
 | --- | --- |
-| `enter`、`left` | `nickname`、`ip`、`client_version`、`channel` |
-| `move` | `nickname`、`ip`、`client_version`、`from_channel`、`to_channel` |
+| `enter`、`left` | `nickname`、`ip`、`location`、`client_version`、`channel` |
+| `move` | `nickname`、`ip`、`location`、`client_version`、`from_channel`、`to_channel` |
 | `change_batch` | `messages` |
 | `status` | `online_count`、`channels` |
 | `status_channel` | `channel_icon`、`channel`、`clients` |
-| `status_client` | `nickname`、`ip` |
+| `status_client` | `nickname`、`ip`、`location` |
 
-例如，使用下面的模板可省略用户 IP：
+例如，使用下面的模板可自定义地域展示：
 
 ```json
 {
   "message_templates": {
-    "enter": "{nickname} 加入了 {channel}",
-    "left": "{nickname} 离开了 {channel}",
-    "move": "{nickname}：{from_channel} → {to_channel}",
+    "enter": "{nickname}（{location}）加入了 {channel}",
+    "left": "{nickname}（{location}）离开了 {channel}",
+    "move": "{nickname}（{location}）：{from_channel} → {to_channel}",
     "change_batch": "TeamSpeak 动态：\n{messages}",
-    "status_client": "  - {nickname}"
+    "status_client": "  - {nickname}（{location}）"
   }
 }
 ```
@@ -112,3 +131,17 @@ WebUI 多行文本框直接输入换行，JSON 中使用 `\n`。用 `{{` 和 `}}
 不支持属性访问、索引、转换及非空格式说明符，例如 `{nickname.name}`、`{nickname[0]}`、`{nickname!r}`、`{nickname:>10}`。`{nickname:}` 与 `{nickname}` 等价。空白文本、未知变量或语法错误会使该项回退默认模板并记录警告，其他有效模板继续生效；模板层的回退不改写已保存的配置。
 
 模板值必须为字符串。注意 AstrBot 会先整理配置：`null` 可能被替换成 Schema 默认值，未知模板键可能在进入插件前被移除；只有实际传到插件的非法类型才会导致校验失败。关闭通知请使用开关。
+
+已保存的进入、离开、移动或客户端行模板若完全等于旧版含 `{ip}` 的默认值，运行时会采用新的地域默认模板；其他自定义模板保持原样。这个调整不改写已保存的配置。
+
+## 开发检查
+
+```sh
+uv sync --locked
+uv run ruff format .
+uv run ruff check .
+uv run ty check
+uv run pytest -q
+```
+
+类型检查使用 ty，覆盖插件源码和测试。根据 [ty 配置文档](https://docs.astral.sh/ty/reference/configuration/)，仅允许独立开发环境中无法解析的 `astrbot.api` 宿主接口；这些接口由 AstrBot 运行环境提供，测试中使用替身。其余导入与类型问题仍会报错。

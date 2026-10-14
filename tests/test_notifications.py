@@ -12,7 +12,8 @@ from core.templates import Templates
 from core.types import Channel, Enter, Left, Move, SessionIdentity, UidIdentity, User
 
 A, B, C = Channel(1, "A"), Channel(2, "B"), Channel(3, "C")
-USER = User(UidIdentity(uuid4(), "uid"), "Alice", None, None)
+USER_IDENTITY = UidIdentity(uuid4(), "uid")
+USER = User(USER_IDENTITY, "Alice", None, None)
 
 
 def enter(channel=A, user=USER):
@@ -107,7 +108,7 @@ def test_snapshot_and_channel_identity():
 @pytest.mark.parametrize(
     "identity",
     [
-        UidIdentity(USER.identity.connection, "different"),
+        UidIdentity(USER_IDENTITY.connection, "different"),
         UidIdentity(uuid4(), "uid"),
         SessionIdentity(uuid4()),
     ],
@@ -266,7 +267,7 @@ async def test_empty_targets_disable_delivery():
 
 async def test_cancellation_keeps_global_deadline_and_order():
     service, now, send = manager()
-    other = replace(USER, identity=UidIdentity(USER.identity.connection, "bob"), nickname="Bob")
+    other = replace(USER, identity=UidIdentity(USER_IDENTITY.connection, "bob"), nickname="Bob")
     service.add(move())
     now[0] = 9
     service.add(move(B, A))
@@ -310,7 +311,7 @@ async def test_disabled_does_not_open_window(config):
 
 async def test_different_user_resets_quiet_deadline():
     service, now, send = manager()
-    other = replace(USER, identity=UidIdentity(USER.identity.connection, "bob"))
+    other = replace(USER, identity=UidIdentity(USER_IDENTITY.connection, "bob"))
     service.add(enter())
     now[0] = 9
     service.add(enter(B, other))

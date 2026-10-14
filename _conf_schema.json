@@ -129,20 +129,20 @@
             "enter": {
                 "description": "进入事件",
                 "type": "text",
-                "default": "{nickname} ({ip}) 加入频道 {channel}，客户端版本：{client_version}。",
-                "hint": "允许变量：{channel}, {client_version}, {ip}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "default": "{nickname} ({location}) 加入频道 {channel}，客户端版本：{client_version}。",
+                "hint": "允许变量：{channel}, {client_version}, {ip}, {location}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
             },
             "left": {
                 "description": "离开事件",
                 "type": "text",
-                "default": "{nickname} ({ip}) 从频道 {channel} 离开了。",
-                "hint": "允许变量：{channel}, {client_version}, {ip}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。 channel 为本用户窗口起始频道。"
+                "default": "{nickname} ({location}) 从频道 {channel} 离开了。",
+                "hint": "允许变量：{channel}, {client_version}, {ip}, {location}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。 channel 为本用户窗口起始频道。"
             },
             "move": {
                 "description": "移动事件",
                 "type": "text",
-                "default": "{nickname} ({ip}) 从频道 {from_channel} 切换到频道 {to_channel}。",
-                "hint": "允许变量：{client_version}, {from_channel}, {ip}, {nickname}, {to_channel}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "default": "{nickname} ({location}) 从频道 {from_channel} 切换到频道 {to_channel}。",
+                "hint": "允许变量：{client_version}, {from_channel}, {ip}, {location}, {nickname}, {to_channel}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
             },
             "change_batch": {
                 "description": "状态变动消息外层",
@@ -165,8 +165,8 @@
             "status_client": {
                 "description": "客户端行",
                 "type": "text",
-                "default": "  - {nickname} ({ip})",
-                "hint": "允许变量：{ip}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
+                "default": "  - {nickname} ({location})",
+                "hint": "允许变量：{ip}, {location}, {nickname}；使用 {{ 和 }} 表示花括号，空白或非法模板回退默认值。"
             }
         }
     }

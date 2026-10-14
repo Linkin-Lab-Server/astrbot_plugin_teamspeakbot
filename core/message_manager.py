@@ -106,7 +106,7 @@ class MessageManager:
         batch = tuple(
             event for record in window.records.values() if (event := project(record)) is not None
         )
-        enabled = {
+        enabled: dict[type[Change], bool] = {
             Enter: self.config.events.enter,
             Left: self.config.events.left,
             Move: self.config.events.move,

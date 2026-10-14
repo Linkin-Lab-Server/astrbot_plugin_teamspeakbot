@@ -1,12 +1,13 @@
 """Capture protocol events as immutable user and channel snapshots."""
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import replace
 from uuid import UUID, uuid4
 
 from astrbot.api import logger
 from ts_async_api.server_query.exception import CmdException
 
+from .location import LocationResolver, normalize_ip
 from .types import (
     Change,
     Channel,
@@ -36,10 +37,12 @@ class EventHandler:
         connection: UUID,
         notify: Callable[[Change], None],
         publish: Callable[[Ready], None],
+        locations: LocationResolver,
     ) -> None:
         self.connection = connection
         self.notify = notify
         self.publish = publish
+        self.locations = locations
         self.clients: dict[int, OnlineClient] = {}
         self.channels: dict[int, Channel] = {}
         self.ready = False
@@ -47,7 +50,7 @@ class EventHandler:
     def channel(self, cid: int) -> Channel:
         return self.channels.get(cid, Channel(cid, None))
 
-    def user(self, fields: Fields) -> User:
+    def user(self, fields: Fields, location: str | None = None) -> User:
         uid = fields.get("client_unique_identifier")
         identity = (
             UidIdentity(self.connection, uid) if uid is not None else SessionIdentity(uuid4())
@@ -57,9 +60,15 @@ class EventHandler:
             fields.get("client_nickname"),
             fields.get("connection_client_ip"),
             fields.get("client_version"),
+            location,
         )
 
-    def synchronize(self, channels: list[Fields], clients: list[Fields]) -> None:
+    def synchronize(
+        self,
+        channels: Sequence[Fields],
+        clients: Sequence[Fields],
+        locations: Mapping[str, str | None] | None = None,
+    ) -> None:
         for fields in channels:
             cid = positive_id(fields, "cid")
             self.channels[cid] = Channel(cid, fields.get("channel_name"))
@@ -67,7 +76,9 @@ class EventHandler:
             if fields.get("client_type") != "0":
                 continue
             clid, cid = positive_id(fields, "clid"), positive_id(fields, "cid")
-            self.clients[clid] = OnlineClient(self.user(fields), self.channel(cid))
+            ip = normalize_ip(fields.get("connection_client_ip"))
+            location = locations.get(ip) if locations is not None and ip is not None else None
+            self.clients[clid] = OnlineClient(self.user(fields, location), self.channel(cid))
 
     def snapshot(self) -> Ready:
         return Ready(tuple(self.clients[clid] for clid in sorted(self.clients)))
@@ -113,7 +124,8 @@ class EventHandler:
                         info = None
                     if info is not None and info.get("client_unique_identifier") == uid:
                         data = {**info, **fields}
-                user = self.user(data)
+                location = await self.locations.resolve(data.get("connection_client_ip"))
+                user = self.user(data, location)
                 previous = self.clients.get(clid)
                 channel = self.channel(cid)
                 self.clients[clid] = OnlineClient(user, channel)

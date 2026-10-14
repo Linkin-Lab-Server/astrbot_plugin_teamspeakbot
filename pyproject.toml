@@ -2,13 +2,18 @@
 name = "astrbot-plugin-teamspeakbot"
 version = "2.0.0"
 requires-python = ">=3.12"
-dependencies = ["ts-async-api"]
+dependencies = ["ts-async-api", "httpx>=0.28.1,<1", "aiofiles>=25.1.0,<26"]
 
 [tool.uv.sources]
 ts-async-api = { git = "https://github.com/Next-Page-Vi/ts-async-api.git", rev = "c30e24a7c26ab26aaff74a4307594c596190550c" }
 
 [dependency-groups]
-dev = ["pytest>=8.4,<10", "pytest-asyncio>=1.1,<2", "ruff>=0.12"]
+dev = [
+    "pytest>=8.4,<10",
+    "pytest-asyncio>=1.1,<2",
+    "ruff>=0.12",
+    "ty>=0.0.87",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -16,6 +21,13 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.ty.environment]
+root = ["..", "."]
+
+[tool.ty.analysis]
+# AstrBot provides these APIs at runtime; unit tests stub them locally.
+allowed-unresolved-imports = ["astrbot.api.**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

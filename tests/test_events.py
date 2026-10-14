@@ -5,13 +5,16 @@ import pytest
 
 from core.client import decode_fields
 from core.event_handler import EventHandler
+from core.location import LocationResolver
 from core.types import Channel, Enter, Left, Move, SessionIdentity
 
 
 @pytest.fixture
 def handler():
     emitted, snapshots = [], []
-    handler = EventHandler(uuid4(), emitted.append, snapshots.append)
+    locations = AsyncMock(spec=LocationResolver)
+    locations.resolve.return_value = None
+    handler = EventHandler(uuid4(), emitted.append, snapshots.append, locations)
     handler.synchronize([{"cid": "1", "channel_name": "A"}, {"cid": "2", "channel_name": "B"}], [])
     handler.ready = True
     return handler, emitted, snapshots
@@ -42,6 +45,23 @@ async def test_capture_before_removal_and_channel_rename(handler):
     assert isinstance(emitted[2], Left) and emitted[2].channel == Channel(2, "B")
     assert emitted[2].user.ip == "ip"
     assert not service.clients
+
+
+async def test_location_captured_after_enrichment_and_retained_by_move_and_leave(handler):
+    service, emitted, snapshots = handler
+    service.locations.resolve.return_value = "浙江省 杭州"
+    query = AsyncMock(
+        return_value={"client_unique_identifier": "uid", "connection_client_ip": "8.8.8.8"}
+    )
+    await service.handle("notifycliententerview", fields(), query)
+    service.locations.resolve.assert_awaited_once_with("8.8.8.8")
+    assert snapshots[-1].clients[0].user.location == "浙江省 杭州"
+    await service.handle("notifyclientmoved", {"clid": "5", "ctid": "2"}, query)
+    await service.handle("notifyclientleftview", {"clid": "5", "cfid": "2"}, query)
+    assert len(emitted) == 3
+    assert all(event.user.location == "浙江省 杭州" for event in emitted)
+    assert not service.clients
+    service.locations.resolve.assert_awaited_once()
 
 
 async def test_rapid_visit_keeps_wire_identity_if_client_already_gone(handler):

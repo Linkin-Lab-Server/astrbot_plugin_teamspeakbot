@@ -19,6 +19,7 @@ from ts_async_api.server_query.utils import escape, unescape
 
 from .config import ConnectionPolicy, ServerConfig
 from .event_handler import EventHandler, Fields
+from .location import LocationResolver
 from .message_manager import MessageManager
 from .types import ConnectionState, Disconnected, Ready
 
@@ -114,7 +115,12 @@ class QueryConnection:
         await self.command("servernotifyregister", event="channel", id=0)
         channels = await self.command("channellist")
         clients = await self.command("clientlist", flags=("uid", "ip", "info"))
-        handler.synchronize(channels, clients)
+        locations = await handler.locations.resolve_many(
+            fields.get("connection_client_ip")
+            for fields in clients
+            if fields.get("client_type") == "0"
+        )
+        handler.synchronize(channels, clients, locations)
         # Replay startup events as baseline while the receive task handles query responses.
         while not self.events.empty():
             name, fields = self.events.get_nowait()
@@ -233,11 +239,16 @@ class QueryConnection:
 
 class TeamSpeakClient:
     def __init__(
-        self, config: ServerConfig, policy: ConnectionPolicy, messages: MessageManager
+        self,
+        config: ServerConfig,
+        policy: ConnectionPolicy,
+        messages: MessageManager,
+        locations: LocationResolver,
     ) -> None:
         self.config = config
         self.policy = policy
         self.messages = messages
+        self.locations = locations
         self.state: ConnectionState = Disconnected()
         self.connection: QueryConnection | None = None
         self._running = False
@@ -262,7 +273,7 @@ class TeamSpeakClient:
                     self.invalidate, log_commands=self.config.log_level == "DEBUG"
                 )
                 self.connection = connection
-                handler = EventHandler(uuid4(), self.messages.add, self.publish)
+                handler = EventHandler(uuid4(), self.messages.add, self.publish, self.locations)
                 try:
                     await connection.run(self.config, handler)
                 except asyncio.CancelledError:

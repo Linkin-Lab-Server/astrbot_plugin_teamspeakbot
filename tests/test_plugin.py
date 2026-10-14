@@ -11,9 +11,11 @@ from astrbot.api import logger
 
 
 @pytest.fixture
-def plugin_class(monkeypatch):
+def plugin_class(monkeypatch, tmp_path):
     # Only the AstrBot-facing boundary is stubbed; the plugin services are real.
     class Star:
+        name = "astrbot_plugin_teamspeakbot"
+
         def __init__(self, context):
             self.context = context
 
@@ -22,17 +24,21 @@ def plugin_class(monkeypatch):
             self.text = text
 
     api = ModuleType("astrbot.api")
-    api.AstrBotConfig = dict
-    api.logger = logger
+    api.__dict__.update(AstrBotConfig=dict, logger=logger)
     events = ModuleType("astrbot.api.event")
-    events.AstrMessageEvent = object
-    events.MessageChain = lambda **kwargs: SimpleNamespace(**kwargs)
-    events.filter = SimpleNamespace(command=lambda name: lambda function: function)
+    events.__dict__.update(
+        AstrMessageEvent=object,
+        MessageChain=lambda **kwargs: SimpleNamespace(**kwargs),
+        filter=SimpleNamespace(command=lambda name: lambda function: function),
+    )
     stars = ModuleType("astrbot.api.star")
-    stars.Context = object
-    stars.Star = Star
+    stars.__dict__.update(
+        Context=object,
+        Star=Star,
+        StarTools=SimpleNamespace(get_data_dir=lambda name: tmp_path),
+    )
     components = ModuleType("astrbot.api.message_components")
-    components.Plain = Plain
+    components.__dict__["Plain"] = Plain
     package = ModuleType("test_teamspeak_plugin")
     package.__path__ = [str(Path(__file__).resolve().parents[1])]
     for name, module in {
@@ -45,6 +51,7 @@ def plugin_class(monkeypatch):
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
     spec = importlib.util.spec_from_file_location("test_teamspeak_plugin.main", Path("main.py"))
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, spec.name, module)
     spec.loader.exec_module(module)
@@ -215,6 +222,34 @@ async def test_initialize_reload_and_repeated_cleanup(plugin_class, monkeypatch)
     await plugin.terminate()
     assert plugin.runtime is None
     assert not [task for task in asyncio.all_tasks() if task.get_name().startswith("teamspeak:")]
+
+
+async def test_reload_persists_location_cache_and_closes_old_services(running_plugin):
+    plugin = running_plugin
+    old_runtime = plugin.runtime
+    location_module = sys.modules[type(old_runtime.locations).__module__]
+    old_runtime.locations.entries["8.8.8.8"] = location_module.Located(location="浙江省 杭州")
+    await plugin.initialize()
+    assert old_runtime.locations.http.is_closed
+    assert old_runtime.locations._writer.done()
+    assert all(task.done() for task in old_runtime.tasks)
+    assert plugin.runtime.locations.entries["8.8.8.8"].location == "浙江省 杭州"
+    current = plugin.runtime
+    await plugin.terminate()
+    assert current.locations.http.is_closed and current.locations._writer.done()
+
+
+async def test_unavailable_data_directory_keeps_monitoring_available(
+    plugin_class, running_plugin, monkeypatch, caplog
+):
+    def denied(name):
+        raise RuntimeError("directory unavailable")
+
+    monkeypatch.setattr(plugin_class.StarTools, "get_data_dir", denied)
+    await running_plugin.initialize()
+    assert running_plugin.runtime is not None
+    assert running_plugin.runtime.locations.path is None
+    assert "using memory location cache" in caplog.text
 
 
 async def test_cancelled_shutdown_clears_runtime_and_propagates(plugin_class, monkeypatch):

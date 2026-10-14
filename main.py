@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Plain
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, StarTools
 
 from .core.client import TeamSpeakClient
 from .core.config import PluginConfig
+from .core.location import LocationResolver
 from .core.message_manager import MessageManager
 from .core.templates import Templates
 from .core.types import Ready
@@ -21,6 +22,7 @@ class Runtime:
     templates: Templates
     messages: MessageManager
     client: TeamSpeakClient
+    locations: LocationResolver
     tasks: tuple[asyncio.Task[None], asyncio.Task[None]]
 
 
@@ -43,12 +45,27 @@ class TeamSpeakBotPlugin(Star):
             )
             return
         messages = MessageManager(settings.notification, templates, self.send_notification)
-        client = TeamSpeakClient(settings.teamspeak_server, settings.connection_policy, messages)
+        try:
+            cache_path = StarTools.get_data_dir(self.name) / "location_cache.json"
+        except (RuntimeError, OSError):
+            logger.warning("Could not access plugin data directory; using memory location cache")
+            cache_path = None
+        locations = LocationResolver(cache_path)
+        try:
+            await locations.load()
+        except BaseException:
+            await locations.close()
+            raise
+        client = TeamSpeakClient(
+            settings.teamspeak_server, settings.connection_policy, messages, locations
+        )
+        locations.start()
         self.runtime = Runtime(
             settings,
             templates,
             messages,
             client,
+            locations,
             (
                 asyncio.create_task(client.run(), name="teamspeak:connection"),
                 asyncio.create_task(messages.run(), name="teamspeak:notifications"),
@@ -83,4 +100,7 @@ class TeamSpeakBotPlugin(Star):
         runtime.messages.stop()
         for task in runtime.tasks:
             task.cancel()
-        await asyncio.gather(*runtime.tasks, return_exceptions=True)
+        try:
+            await asyncio.gather(*runtime.tasks, return_exceptions=True)
+        finally:
+            await runtime.locations.close()

@@ -13,9 +13,9 @@ class MessageType(Enum):
 
 
 api = ModuleType("astrbot.api")
-api.logger = logging.getLogger("astrbot.plugin.astrbot_plugin_teamspeakbot")
+api.__dict__["logger"] = logging.getLogger("astrbot.plugin.astrbot_plugin_teamspeakbot")
 platform = ModuleType("astrbot.api.platform")
-platform.MessageType = MessageType
+platform.__dict__["MessageType"] = MessageType
 sys.modules["astrbot"] = ModuleType("astrbot")
 sys.modules["astrbot.api"] = api
 sys.modules["astrbot.api.platform"] = platform

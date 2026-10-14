@@ -9,15 +9,15 @@ from astrbot.api import logger
 from .types import Change, Enter, Left, Move, OnlineClient, Ready, User
 
 DEFAULT_TEMPLATES = {
-    "enter": "{nickname} ({ip}) 加入频道 {channel}，客户端版本：{client_version}。",
-    "left": "{nickname} ({ip}) 从频道 {channel} 离开了。",
-    "move": "{nickname} ({ip}) 从频道 {from_channel} 切换到频道 {to_channel}。",
+    "enter": "{nickname} ({location}) 加入频道 {channel}，客户端版本：{client_version}。",
+    "left": "{nickname} ({location}) 从频道 {channel} 离开了。",
+    "move": "{nickname} ({location}) 从频道 {from_channel} 切换到频道 {to_channel}。",
     "change_batch": "{messages}",
     "status": "当前在线客户端数：{online_count}\n{channels}",
     "status_channel": "{channel_icon} {channel}\n{clients}",
-    "status_client": "  - {nickname} ({ip})",
+    "status_client": "  - {nickname} ({location})",
 }
-USER_VARIABLES = {"nickname", "ip", "client_version"}
+USER_VARIABLES = {"nickname", "ip", "location", "client_version"}
 VARIABLES = {
     "enter": USER_VARIABLES | {"channel"},
     "left": USER_VARIABLES | {"channel"},
@@ -25,7 +25,7 @@ VARIABLES = {
     "change_batch": {"messages"},
     "status": {"online_count", "channels"},
     "status_channel": {"channel_icon", "channel", "clients"},
-    "status_client": {"nickname", "ip"},
+    "status_client": {"nickname", "ip", "location"},
 }
 
 
@@ -36,6 +36,9 @@ class Templates:
             logger.warning("message_templates.%s: unknown template; ignoring it", key)
         for key, default in DEFAULT_TEMPLATES.items():
             value = custom.get(key, default)
+            # Upgrade only exact old defaults; keep intentional custom IP templates.
+            if "{location}" in default and value == default.replace("{location}", "{ip}"):
+                value = default
             try:
                 if not isinstance(value, str) or not value.strip():
                     raise ValueError("template must not be blank")
@@ -68,7 +71,12 @@ class Templates:
 
     @staticmethod
     def _user_values(user: User) -> dict[str, str | None]:
-        return {"nickname": user.nickname, "ip": user.ip, "client_version": user.client_version}
+        return {
+            "nickname": user.nickname,
+            "ip": user.ip,
+            "location": user.location,
+            "client_version": user.client_version,
+        }
 
     def event(self, event: Change) -> str:
         values = self._user_values(event.user)
@@ -91,7 +99,12 @@ class Templates:
             clients = grouped[cid]
             channel = clients[0].channel
             lines = [
-                self.render("status_client", nickname=client.user.nickname, ip=client.user.ip)
+                self.render(
+                    "status_client",
+                    nickname=client.user.nickname,
+                    ip=client.user.ip,
+                    location=client.user.location,
+                )
                 for client in clients
             ]
             channels.append(

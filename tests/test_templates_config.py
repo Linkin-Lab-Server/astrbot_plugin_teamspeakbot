@@ -6,7 +6,7 @@ import pytest
 
 from core.config import NotificationConfig, PluginConfig
 from core.templates import DEFAULT_TEMPLATES, Templates
-from core.types import Channel, Enter, OnlineClient, Ready, UidIdentity, User
+from core.types import Channel, Enter, Left, Move, OnlineClient, Ready, UidIdentity, User
 
 USER = User(UidIdentity(uuid4(), "uid"), "{ip}", None, None)
 
@@ -70,9 +70,44 @@ def test_online_templates_and_empty_server():
     assert templates.status(snapshot) == "2\n😴 AFK\n  - {ip} (未知)\n📢 2\n  - {ip} (未知)"
 
 
+@pytest.mark.parametrize("key", ["enter", "left", "move", "status_client"])
+def test_exact_old_default_upgrades_without_changing_custom_mapping(key):
+    original = DEFAULT_TEMPLATES[key].replace("{location}", "{ip}")
+    custom = {key: original}
+    templates = Templates(custom)
+    assert templates._parts[key] == Templates({})._parts[key]
+    assert custom == {key: original}
+
+
+def test_default_messages_show_location_and_custom_templates_can_show_ip():
+    user = User(UidIdentity(uuid4(), "uid"), "Alice", "8.8.8.8", "3.6", "浙江省 杭州")
+    snapshot = Ready((OnlineClient(user, Channel(1, "A")),))
+    templates = Templates({})
+    texts = [
+        templates.status(snapshot),
+        templates.event(Enter(user, Channel(1, "A"))),
+        templates.event(Left(user, Channel(1, "A"))),
+        templates.event(Move(user, Channel(1, "A"), Channel(2, "B"))),
+    ]
+    assert all("浙江省 杭州" in text and "8.8.8.8" not in text for text in texts)
+    custom = Templates(
+        {"status_client": "{nickname}: {ip} / {location}", "enter": "{ip}|{location}"}
+    )
+    assert "Alice: 8.8.8.8 / 浙江省 杭州" in custom.status(snapshot)
+    assert custom.event(Enter(user, Channel(1, "A"))) == "8.8.8.8|浙江省 杭州"
+
+
+def test_missing_location_stays_unknown_without_ip_fallback():
+    user = User(UidIdentity(uuid4(), "uid"), "Alice", "8.8.8.8", None)
+    text = Templates({}).status(Ready((OnlineClient(user, Channel(1, "A")),)))
+    assert "Alice (未知)" in text and "8.8.8.8" not in text
+
+
 @pytest.mark.parametrize("minimum,maximum", [(0, 60), (10, 60)])
 def test_valid_windows(minimum, maximum):
-    config = NotificationConfig(window={"quiet_seconds": minimum, "max_seconds": maximum})
+    config = NotificationConfig.model_validate(
+        {"window": {"quiet_seconds": minimum, "max_seconds": maximum}}
+    )
     assert (config.window.quiet_seconds, config.window.max_seconds) == (minimum, maximum)
 
 
@@ -82,7 +117,9 @@ def test_valid_windows(minimum, maximum):
 )
 def test_invalid_windows_rejected(minimum, maximum):
     with pytest.raises(ValueError):
-        NotificationConfig(window={"quiet_seconds": minimum, "max_seconds": maximum})
+        NotificationConfig.model_validate(
+            {"window": {"quiet_seconds": minimum, "max_seconds": maximum}}
+        )
 
 
 @pytest.mark.parametrize(

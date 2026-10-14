@@ -24,6 +24,7 @@ class User:
     nickname: str | None
     ip: str | None
     client_version: str | None
+    location: str | None = None
 
 
 @dataclass(frozen=True)
