@@ -214,9 +214,23 @@ def test_schema_defaults_match_runtime():
     assert schema["teamspeak_server"]["items"]["password"]["secret"] is True
     data["teamspeak_server"].update(username="admin", password="password")
     parsed = PluginConfig.parse(data)
+    assert parsed.location.provider == "ipyou.net"
+    assert schema["location"]["items"]["provider"]["options"] == ["ipyou.net", "IPWhois"]
     assert parsed.message_templates == DEFAULT_TEMPLATES
     assert Templates(parsed.message_templates)
     assert all(entry["type"] == "text" for entry in schema["message_templates"]["items"].values())
+
+
+@pytest.mark.parametrize("provider", ["ipyou.net", "IPWhois"])
+def test_location_provider_choices(provider):
+    parsed = PluginConfig.parse(configuration() | {"location": {"provider": provider}})
+    assert parsed.location.provider == provider
+
+
+@pytest.mark.parametrize("provider", [None, "", "other", "https://example.com", 0])
+def test_invalid_location_provider_is_rejected(provider):
+    with pytest.raises(ValueError, match="location.provider"):
+        PluginConfig.parse(configuration() | {"location": {"provider": provider}})
 
 
 @pytest.mark.parametrize(

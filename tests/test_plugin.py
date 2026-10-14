@@ -1,11 +1,13 @@
 import asyncio
 import importlib.util
+import json
 import sys
 from dataclasses import replace
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from astrbot.api import logger
 
@@ -113,6 +115,7 @@ async def test_command_permissions_before_state_access(running_plugin):
 
 async def test_disconnected_query_returns_without_connecting(running_plugin):
     plugin = running_plugin
+    assert plugin.runtime.locations.provider == "ipyou.net"
     tasks = asyncio.all_tasks()
     event = Event("bot:GroupMessage:allowed")
     async with asyncio.timeout(0.1):
@@ -224,16 +227,37 @@ async def test_initialize_reload_and_repeated_cleanup(plugin_class, monkeypatch)
     assert not [task for task in asyncio.all_tasks() if task.get_name().startswith("teamspeak:")]
 
 
-async def test_reload_persists_location_cache_and_closes_old_services(running_plugin):
+@pytest.mark.parametrize("provider", ["ipyou.net", "IPWhois"])
+async def test_reload_clears_location_cache_and_closes_old_services(
+    running_plugin, provider, monkeypatch
+):
     plugin = running_plugin
     old_runtime = plugin.runtime
     location_module = sys.modules[type(old_runtime.locations).__module__]
     old_runtime.locations.entries["8.8.8.8"] = location_module.Located(location="浙江省 杭州")
+    old_runtime.locations.retry_after_until = old_runtime.locations.clock() + 3600
+    plugin.raw_config["location"] = {"provider": provider}
     await plugin.initialize()
     assert old_runtime.locations.http.is_closed
     assert old_runtime.locations._writer.done()
     assert all(task.done() for task in old_runtime.tasks)
-    assert plugin.runtime.locations.entries["8.8.8.8"].location == "浙江省 杭州"
+    assert not plugin.runtime.locations.entries
+    assert plugin.runtime.locations.retry_after_until is None
+    assert plugin.runtime.locations.provider == provider
+    payload = json.loads(plugin.runtime.locations.path.read_text())
+    assert payload["entries"] == {} and payload["retry_after_until"] is None
+    assert payload["provider"] == provider
+    url = f"https://{'ipyou.net' if provider == 'ipyou.net' else 'ipwho.is'}/8.8.8.8"
+    data = (
+        {"ip": "8.8.8.8", "geo": {"country_code": "CN", "province": "内蒙古", "city": "包头市"}}
+        if provider == "ipyou.net"
+        else {"success": True, "country_code": "CN", "region": "内蒙古", "city": "包头市"}
+    )
+    get = AsyncMock(return_value=httpx.Response(200, json=data, request=httpx.Request("GET", url)))
+    monkeypatch.setattr(plugin.runtime.locations.http, "get", get)
+    assert await plugin.runtime.locations.resolve("8.8.8.8") == "内蒙古 包头市"
+    assert get.await_args is not None
+    assert get.await_args.args[0] == url
     current = plugin.runtime
     await plugin.terminate()
     assert current.locations.http.is_closed and current.locations._writer.done()

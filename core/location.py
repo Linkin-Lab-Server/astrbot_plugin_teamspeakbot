@@ -1,4 +1,4 @@
-"""Exact-address IPWhois lookups with an asynchronous persistent cache."""
+"""Exact-address location lookups with an asynchronous persistent cache."""
 
 import asyncio
 import json
@@ -15,14 +15,15 @@ import aiofiles
 import aiofiles.os
 import httpx
 from astrbot.api import logger
-from pydantic import Field, TypeAdapter, ValidationError, field_validator
+from pydantic import Field, field_validator
 
-from .config import StrictConfig
+from .config import LocationProvider, StrictConfig
 
 LOOKUP_TIMEOUT = 3
 CACHE_LIMIT = 2048
 FAILURE_SECONDS = 600
 SAVE_DELAY = 1
+IPYOU_INTERVAL = 1
 
 
 class Located(StrictConfig):
@@ -43,7 +44,6 @@ class Unavailable(StrictConfig):
 
 
 type CacheEntry = Located | Unavailable
-ENTRY = TypeAdapter(Annotated[CacheEntry, Field(discriminator="kind")])
 
 
 def normalize_ip(value: str | None) -> str | None:
@@ -73,58 +73,29 @@ class LocationResolver:
         self,
         path: Path | None,
         *,
+        provider: LocationProvider = "ipyou.net",
         http: httpx.AsyncClient | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.path = path
+        self.provider = provider
         self.http = http if http is not None else httpx.AsyncClient(timeout=LOOKUP_TIMEOUT)
         self.clock = clock
         self.entries: OrderedDict[str, CacheEntry] = OrderedDict()
         self.retry_after_until: float | None = None
-        self._slots = asyncio.Semaphore(4)
+        self._slots = asyncio.Semaphore(1 if provider == "ipyou.net" else 4)
+        self._next_request_at: float | None = None
         self._pending: dict[str, asyncio.Task[str | None]] = {}
         self._dirty = asyncio.Event()
         self._stopping = asyncio.Event()
         self._writer: asyncio.Task[None] | None = None
 
-    async def load(self) -> None:
-        """Read validated entries and discard expired failures.
-
-        Cache damage is recoverable and must not prevent TeamSpeak monitoring.
-        """
-        if self.path is None:
-            return
-        try:
-            async with aiofiles.open(self.path, encoding="utf-8") as file:
-                payload = json.loads(await file.read())
-            if (
-                not isinstance(payload, dict)
-                or type(payload.get("version")) is not int
-                or payload["version"] != 1
-                or not isinstance(payload.get("entries"), dict)
-            ):
-                raise ValueError("unsupported location cache format")
-            now = self.clock()
-            for address, value in payload["entries"].items():
-                key = normalize_ip(address)
-                try:
-                    entry = ENTRY.validate_python(value)
-                except ValidationError:
-                    logger.warning("Ignoring invalid IPWhois cache entry")
-                    continue
-                if key is None or (isinstance(entry, Unavailable) and entry.retry_at <= now):
-                    continue
-                self.entries[key] = entry
-                self.entries.move_to_end(key)
-                if len(self.entries) > CACHE_LIMIT:
-                    self.entries.popitem(last=False)
-            retry = payload.get("retry_after_until")
-            if type(retry) in (int, float) and math.isfinite(retry) and retry > now:
-                self.retry_after_until = float(retry)
-        except FileNotFoundError:
-            pass
-        except (OSError, ValueError, UnicodeError):
-            logger.warning("Could not load IPWhois cache; continuing with memory cache")
+    async def clear(self) -> None:
+        """Reset lookup state and overwrite the file before starting any workers."""
+        self.entries.clear()
+        self.retry_after_until = None
+        self._next_request_at = None
+        await self.save()
 
     def start(self) -> None:
         self._writer = asyncio.create_task(self.run(), name="teamspeak:location-cache")
@@ -189,7 +160,7 @@ class LocationResolver:
         }
 
     async def _lookup(self, key: str) -> str | None:
-        """Query IPWhois and capture a success or temporary failure.
+        """Query the selected provider and capture a success or temporary failure.
 
         Args:
             key: Canonical public address.
@@ -202,16 +173,26 @@ class LocationResolver:
             async with asyncio.timeout(LOOKUP_TIMEOUT), self._slots:
                 if self.retry_after_until is not None and self.clock() < self.retry_after_until:
                     return None
-                response = await self.http.get(
-                    f"https://ipwho.is/{key}",
-                    params={
-                        "lang": "zh-CN",
-                        "fields": "success,country_code,country,region,city",
-                    },
-                )
+                if self.provider == "ipyou.net":
+                    if self._next_request_at is not None:
+                        await asyncio.sleep(max(0, self._next_request_at - time.monotonic()))
+                    if self.retry_after_until is not None and self.clock() < self.retry_after_until:
+                        return None
+                    self._next_request_at = time.monotonic() + IPYOU_INTERVAL
+                    response = await self.http.get(
+                        f"https://ipyou.net/{key}", headers={"Accept": "application/json"}
+                    )
+                else:
+                    response = await self.http.get(
+                        f"https://ipwho.is/{key}",
+                        params={
+                            "lang": "zh-CN",
+                            "fields": "success,country_code,country,region,city",
+                        },
+                    )
                 if response.status_code == 429:
                     retry = response.headers.get("Retry-After")
-                    until = self.clock() + 86400
+                    until = self.clock() + (60 if self.provider == "ipyou.net" else 86400)
                     if retry is not None:
                         try:
                             seconds = float(retry)
@@ -229,27 +210,46 @@ class LocationResolver:
                     self._dirty.set()
                 response.raise_for_status()
                 data = response.json()
-                if not isinstance(data, dict) or data.get("success") is not True:
-                    raise ValueError("unsuccessful IPWhois response")
+                if not isinstance(data, dict):
+                    raise ValueError("invalid location response")
+                if self.provider == "ipyou.net":
+                    address = data.get("ip")
+                    if (
+                        not isinstance(address, str)
+                        or normalize_ip(address) != key
+                        or not isinstance(data.get("geo"), dict)
+                    ):
+                        raise ValueError("unsuccessful ipyou response")
+                    data = data["geo"]
+                    region_field = "province"
+                else:
+                    if data.get("success") is not True:
+                        raise ValueError("unsuccessful IPWhois response")
+                    region_field = "region"
+                country_code = data.get("country_code")
+                if country_code is not None and not isinstance(country_code, str):
+                    raise ValueError("invalid location country code")
                 parts = []
                 fields = (
-                    ("region", "city")
-                    if data.get("country_code") == "CN"
-                    else ("country", "region", "city")
+                    (region_field, "city")
+                    if country_code is not None and country_code.upper() == "CN"
+                    else ("country", region_field, "city")
                 )
                 for field in fields:
                     value = data.get(field)
                     if value is not None:
                         if not isinstance(value, str):
-                            raise ValueError("invalid IPWhois region field")
+                            raise ValueError("invalid location region field")
                         if (label := value.strip()) and label not in parts:
                             parts.append(label)
                 if not parts:
-                    raise ValueError("empty IPWhois region")
+                    raise ValueError("empty location region")
                 entry = Located(location=" ".join(parts))
         except (httpx.HTTPError, TimeoutError, ValueError, UnicodeError) as exc:
             logger.warning(
-                "IPWhois lookup failed (%s); temporarily caching failure", type(exc).__name__
+                "%s lookup failed (%s); temporarily caching failure",
+                self.provider,
+                type(exc).__name__,
             )
             entry = Unavailable(retry_at=self.clock() + FAILURE_SECONDS)
         self.entries[key] = entry
@@ -271,6 +271,7 @@ class LocationResolver:
         now = self.clock()
         payload = {
             "version": 1,
+            "provider": self.provider,
             "entries": {
                 key: entry.model_dump()
                 for key, entry in self.entries.items()
@@ -285,7 +286,7 @@ class LocationResolver:
                 await file.write(json.dumps(payload, ensure_ascii=False, allow_nan=False))
             await aiofiles.os.replace(temporary, self.path)
         except OSError:
-            logger.warning("Could not save IPWhois cache; continuing with memory cache")
+            logger.warning("Could not save location cache; continuing with memory cache")
 
     async def run(self) -> None:
         while True:

@@ -50,9 +50,9 @@ class TeamSpeakBotPlugin(Star):
         except (RuntimeError, OSError):
             logger.warning("Could not access plugin data directory; using memory location cache")
             cache_path = None
-        locations = LocationResolver(cache_path)
+        locations = LocationResolver(cache_path, provider=settings.location.provider)
         try:
-            await locations.load()
+            await locations.clear()
         except BaseException:
             await locations.close()
             raise

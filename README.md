@@ -3,7 +3,7 @@
 通过 TeamSpeak ServerQuery 维护在线客户端和频道快照，在 AstrBot 会话中查询状态，并合并推送用户进入、离开和切换频道的动态。
 
 - `/ts`：按频道列出在线语音客户端、昵称和地域，不计入 ServerQuery 客户端。
-- IP 地域：使用 IPWhois 异步查询，按完整 IPv4 / IPv6 地址缓存并持久化到插件数据目录。
+- IP 地域：可选 ipyou.net 或 IPWhois，按完整 IPv4 / IPv6 地址缓存并持久化到插件数据目录。
 - 动态通知：合并连续变化，只发送窗口起点到终点的净变化。
 - 访问控制：指定哪些会话可以查询状态、接收通知。
 - 自动重连：断线立即作废快照，重新同步成功后恢复查询和通知。
@@ -44,21 +44,27 @@
 
 ### IP 地域与持久化缓存
 
-地域查询固定使用 [IPWhois](https://ipwhois.io/documentation) 的 `https://ipwho.is/{ip}` 接口，通过 HTTPX 异步请求中文结果，不提供自定义 API 配置。查询会将客户端公网 IP 发送给该服务；缺失、非法及非公网地址不会发起请求。
+在配置页的“IP 地域查询”中选择服务，默认使用 ipyou.net：
+
+| 配置项 | 默认值 | 可选值 |
+| --- | --- | --- |
+| `location.provider` | `ipyou.net` | `ipyou.net`、`IPWhois` |
+
+[ipyou.net](https://github.com/ipyou-net/ipyou-cli/blob/main/docs/api.md) 使用 `https://ipyou.net/{ip}`，请求头携带 `Accept: application/json`；[IPWhois](https://ipwhois.io/documentation) 使用 `https://ipwho.is/{ip}` 并请求中文结果。两个接口均通过 HTTPX 异步访问，无需填写 API Key。查询会将客户端公网 IP 发送给所选服务；缺失、非法及非公网地址不会发起请求。
 
 国内显示省、市，国外补充国家，重复名称去重；名称沿用接口结果，不追加运营商。服务推断的是 IP 归属地域，不保证与用户实际所在地一致。查询失败或没有有效地域时显示“未知”，不会自动展示 IP。
 
-首次同步按唯一 IP 批量查询，最多同时请求 4 个地址，整体等待最多 3 秒。实时进入事件在取得 IP 后，地域查询最多等待 3 秒。超时取消未完成请求，已成功取得的结果保留；移动和离开沿用捕获的地域。查询失败不会导致 TeamSpeak 重连。
+首次同步按唯一 IP 批量查询，整体等待最多 3 秒。IPWhois 最多同时请求 4 个地址；ipyou.net 串行查询，请求间隔至少 1 秒。实时进入事件在取得 IP 后，地域查询最多等待 3 秒，包括排队等待时间。超时取消未完成请求，已成功取得的结果保留；初始批次未完成查询的用户显示“未知”。移动和离开沿用捕获的地域，查询失败不会导致 TeamSpeak 重连。
 
-缓存通过 `aiofiles` 异步保存于 AstrBot 实际数据目录下的 `plugin_data/astrbot_plugin_teamspeakbot/location_cache.json`，目录通过 `StarTools.get_data_dir()` 获取，符合 [AstrBot 插件存储规范](https://docs.astrbot.app/dev/star/guides/storage.html)。缓存不放在插件源码目录，重连、重载及重启后可复用。
+缓存通过 `aiofiles` 异步保存于 AstrBot 实际数据目录下的 `plugin_data/astrbot_plugin_teamspeakbot/location_cache.json`，目录通过 `StarTools.get_data_dir()` 获取，符合 [AstrBot 插件存储规范](https://docs.astrbot.app/dev/star/guides/storage.html)。同一次插件运行期间，TeamSpeak 重连可复用缓存。每次插件加载或重载都会清空内存及文件中的地域缓存，并重置查询冷却状态，再使用当前配置的服务重新查询；旧文件不再恢复到内存。
 
 - IPv4 和 IPv6 均按完整地址缓存，不按网段推断其他地址的地域；IPv6 等价写法使用同一规范化键。
-- 成功结果没有时间有效期；临时失败缓存 10 分钟，再次遇到该 IP 时可重试。最多保留 2,048 项，超过容量按最近使用顺序淘汰。
-- HTTP 429 按有效的 `Retry-After` 暂停新查询，缺失或无效时暂停 24 小时；暂停状态也会保存。
+- 成功结果在本次运行期间没有时间有效期；临时失败缓存 10 分钟，再次遇到该 IP 时可重试。最多保留 2,048 项，超过容量按最近使用顺序淘汰。
+- HTTP 429 按有效的 `Retry-After` 暂停新查询，缺失或无效时 ipyou.net 暂停 60 秒，IPWhois 暂停 24 小时。
 - 缓存变更合并后通常在 1 秒内异步落盘，文件写入耗时另计；使用同目录临时文件原子替换，停用和重载时完成最后一次保存。
-- 文件损坏或读写失败会记录警告，当前实例继续使用内存缓存，后续变更重新尝试保存。
+- 文件写入失败会记录警告，当前实例继续使用内存缓存，后续变更重新尝试保存；旧文件不会用于新实例的查询。
 
-要强制刷新地域，请先关闭插件，删除上述缓存文件，再打开插件。缓存由插件运行时管理，无需手动编辑。Docker 部署需持久化 AstrBot 的数据目录，才能在容器重建后保留缓存。
+要刷新地域或切换查询服务，保存配置后重载插件即可，无需手动删除缓存文件。
 
 ### 通知
 

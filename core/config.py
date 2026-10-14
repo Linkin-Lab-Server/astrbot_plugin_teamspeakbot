@@ -1,12 +1,13 @@
 """Strict configuration parsing without legacy configuration migration."""
 
 from collections.abc import Mapping
-from typing import Annotated
+from typing import Annotated, Literal
 
 from astrbot.api.platform import MessageType
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 PositiveInt = Annotated[int, Field(gt=0)]
+type LocationProvider = Literal["IPWhois", "ipyou.net"]
 
 
 class StrictConfig(BaseModel):
@@ -40,6 +41,10 @@ class ServerConfig(StrictConfig):
 class ConnectionPolicy(StrictConfig):
     reconnect_interval: PositiveInt = 5
     banned_retry_interval: PositiveInt = 120
+
+
+class LocationConfig(StrictConfig):
+    provider: LocationProvider = "ipyou.net"
 
 
 class ChangeEvents(StrictConfig):
@@ -90,6 +95,7 @@ class NotificationConfig(StrictConfig):
 class PluginConfig(StrictConfig):
     teamspeak_server: ServerConfig
     connection_policy: ConnectionPolicy = ConnectionPolicy()
+    location: LocationConfig = LocationConfig()
     notification: NotificationConfig = NotificationConfig()
     message_templates: dict[str, str] = Field(default_factory=dict)
 

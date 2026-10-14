@@ -23,11 +23,12 @@ CHINA = {
 async def resolver_factory(tmp_path):
     created = []
 
-    def create(handler, *, clock=lambda: 1700000000.0, path=None):
+    def create(handler, *, clock=lambda: 1700000000.0, path=None, provider="IPWhois"):
         resolver = LocationResolver(
             tmp_path / "location_cache.json" if path is None else path,
             http=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
             clock=clock,
+            provider=provider,
         )
         created.append(resolver)
         return resolver
@@ -100,6 +101,123 @@ async def test_region_format_and_fixed_request(resolver_factory, data, expected)
     assert isinstance(resolver.entries["8.8.8.8"], Located)
 
 
+@pytest.mark.parametrize(
+    "ip,geo,expected",
+    [
+        (
+            "1.30.246.7",
+            {"country_code": "CN", "country": "中国", "province": "内蒙古", "city": "包头市"},
+            "内蒙古 包头市",
+        ),
+        (
+            "2400:3200::1",
+            {"country_code": "cn", "country": "中国", "province": "浙江省", "city": "杭州市"},
+            "浙江省 杭州市",
+        ),
+        (
+            "8.8.8.8",
+            {"country_code": "US", "country": "美国", "province": "加州", "city": "山景城"},
+            "美国 加州 山景城",
+        ),
+        (
+            "1.1.1.1",
+            {"country": "新加坡", "province": "新加坡", "city": " 新加坡 "},
+            "新加坡",
+        ),
+        ("1.30.246.7", {"country_code": "CN", "province": "内蒙古", "city": None}, "内蒙古"),
+    ],
+)
+async def test_ipyou_request_and_region_format(resolver_factory, ip, geo, expected):
+    def response(request):
+        assert request.url.scheme == "https" and request.url.host == "ipyou.net"
+        assert request.url.path == f"/{ip}"
+        assert not request.url.params
+        assert request.headers["Accept"] == "application/json"
+        return httpx.Response(200, json={"ip": ip, "geo": geo})
+
+    resolver = resolver_factory(response, provider="ipyou.net")
+    assert await resolver.resolve(ip) == expected
+    assert await resolver.resolve(ip) == expected
+    assert isinstance(resolver.entries[ip], Located)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        {"error": "invalid ip"},
+        {"ip": 123, "geo": {"city": "包头"}},
+        {"ip": "1.30.246.8", "geo": {"city": "包头"}},
+        {"ip": "1.30.246.7", "geo": None},
+        {"ip": "1.30.246.7", "geo": []},
+        {"ip": "1.30.246.7", "geo": {}},
+        {"ip": "1.30.246.7", "geo": {"country_code": 123, "city": "包头"}},
+        {"ip": "1.30.246.7", "geo": {"city": 123}},
+        {"ip": "1.30.246.7", "geo": {"city": " "}},
+    ],
+)
+async def test_bad_ipyou_responses_cache_temporary_failure(resolver_factory, data, caplog):
+    resolver = resolver_factory(
+        lambda request: httpx.Response(200, json=data), provider="ipyou.net"
+    )
+    assert await resolver.resolve("1.30.246.7") is None
+    assert isinstance(resolver.entries["1.30.246.7"], Unavailable)
+    assert "ipyou.net lookup failed" in caplog.text
+
+
+async def test_ipyou_batch_spaces_requests_and_deduplicates(resolver_factory, monkeypatch):
+    monkeypatch.setattr(location, "IPYOU_INTERVAL", 0.03)
+    started = []
+
+    def response(request):
+        started.append(asyncio.get_running_loop().time())
+        return httpx.Response(
+            200,
+            json={"ip": request.url.path[1:], "geo": {"country_code": "CN", "city": "包头"}},
+        )
+
+    resolver = resolver_factory(response, provider="ipyou.net")
+    addresses = ["1.30.246.7", "1.30.246.8", "1.30.246.9"]
+    assert await resolver.resolve_many(addresses + addresses) == dict.fromkeys(addresses, "包头")
+    assert len(started) == 3
+    assert all(right - left >= 0.03 for left, right in zip(started, started[1:], strict=False))
+
+
+async def test_ipyou_batch_timeout_cancels_queued_requests(resolver_factory, monkeypatch):
+    monkeypatch.setattr(location, "LOOKUP_TIMEOUT", 0.03)
+    calls = []
+
+    def response(request):
+        calls.append(request)
+        return httpx.Response(
+            200,
+            json={"ip": request.url.path[1:], "geo": {"country_code": "CN", "city": "包头"}},
+        )
+
+    resolver = resolver_factory(response, provider="ipyou.net")
+    result = await resolver.resolve_many(["1.30.246.7", "1.30.246.8", "1.30.246.9"])
+    assert result["1.30.246.7"] == "包头"
+    assert len(calls) == 1 and not resolver._pending
+    await asyncio.sleep(0)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("retry,duration", [(None, 60), ("invalid", 60), ("120", 120)])
+async def test_ipyou_cooldown_uses_retry_after(resolver_factory, monkeypatch, retry, duration):
+    monkeypatch.setattr(location, "IPYOU_INTERVAL", 0.001)
+    calls = []
+
+    def response(request):
+        calls.append(request)
+        return httpx.Response(429, headers={} if retry is None else {"Retry-After": retry})
+
+    resolver = resolver_factory(response, provider="ipyou.net")
+    assert await resolver.resolve("1.30.246.7") is None
+    assert resolver.retry_after_until == resolver.clock() + duration
+    assert await resolver.resolve("8.8.8.8") is None
+    assert len(calls) == 1
+
+
 async def test_exact_addresses_and_normalized_ipv6_share_only_identical_keys(resolver_factory):
     requests = []
 
@@ -124,7 +242,7 @@ async def test_exact_addresses_and_normalized_ipv6_share_only_identical_keys(res
     assert normalize_ip("::ffff:8.8.8.8") == "8.8.8.8"
 
 
-async def test_success_has_no_time_expiration_and_survives_restart(resolver_factory):
+async def test_success_has_no_time_expiration_and_is_cleared_on_restart(resolver_factory):
     now = [1700000000.0]
     calls = []
 
@@ -138,13 +256,17 @@ async def test_success_has_no_time_expiration_and_survives_restart(resolver_fact
     payload = json.loads(original.path.read_text())
     assert payload["entries"]["8.8.8.8"] == {"kind": "located", "location": "浙江省 杭州"}
     now[0] += 86400 * 365
-    restored = resolver_factory(response, clock=lambda: now[0])
-    await restored.load()
-    assert await restored.resolve("8.8.8.8") == "浙江省 杭州"
+    assert await original.resolve("8.8.8.8") == "浙江省 杭州"
     assert len(calls) == 1
+    restored = resolver_factory(response, clock=lambda: now[0])
+    await restored.clear()
+    assert not restored.entries
+    assert json.loads(restored.path.read_text())["entries"] == {}
+    assert await restored.resolve("8.8.8.8") == "浙江省 杭州"
+    assert len(calls) == 2
 
 
-async def test_failure_retries_after_ten_minutes_and_survives_restart(resolver_factory):
+async def test_failure_is_persisted_and_retries_after_ten_minutes(resolver_factory):
     now = [1700000000.0]
     calls = []
 
@@ -156,12 +278,11 @@ async def test_failure_retries_after_ten_minutes_and_survives_restart(resolver_f
     assert await original.resolve("8.8.8.8") is None
     assert original.entries["8.8.8.8"].retry_at == now[0] + 600
     await original.save()
-    restored = resolver_factory(response, clock=lambda: now[0])
-    await restored.load()
-    assert await restored.resolve("8.8.8.8") is None
+    assert json.loads(original.path.read_text())["entries"]["8.8.8.8"]["kind"] == "unavailable"
+    assert await original.resolve("8.8.8.8") is None
     assert len(calls) == 1
     now[0] += 600
-    assert await restored.resolve("8.8.8.8") == "浙江省 杭州"
+    assert await original.resolve("8.8.8.8") == "浙江省 杭州"
     assert len(calls) == 2
 
 
@@ -202,13 +323,11 @@ async def test_rate_limit_cooldown_is_persistent(resolver_factory, retry):
     assert original.retry_after_until == now[0] + duration
     assert await original.resolve("8.8.4.4") is None
     await original.save()
-    restored = resolver_factory(response, clock=lambda: now[0])
-    await restored.load()
-    assert restored.retry_after_until == now[0] + duration
-    assert await restored.resolve("1.1.1.1") is None
+    assert json.loads(original.path.read_text())["retry_after_until"] == now[0] + duration
+    assert await original.resolve("1.1.1.1") is None
     assert len(calls) == 1
     now[0] += duration
-    assert await restored.resolve("1.1.1.1") is None
+    assert await original.resolve("1.1.1.1") is None
     assert len(calls) == 2
 
 
@@ -219,10 +338,9 @@ async def test_cache_capacity_uses_last_access_order(resolver_factory, monkeypat
     await resolver.resolve("8.8.4.4")
     await resolver.resolve("8.8.8.8")
     await resolver.save()
-    restored = resolver_factory(lambda request: httpx.Response(200, json=CHINA))
-    await restored.load()
-    await restored.resolve("1.1.1.1")
-    assert list(restored.entries) == ["8.8.8.8", "1.1.1.1"]
+    assert list(json.loads(resolver.path.read_text())["entries"]) == ["8.8.4.4", "8.8.8.8"]
+    await resolver.resolve("1.1.1.1")
+    assert list(resolver.entries) == ["8.8.8.8", "1.1.1.1"]
 
 
 async def test_duplicate_queries_share_one_request(resolver_factory):
@@ -326,17 +444,21 @@ async def test_cancellation_propagates_and_leaves_no_failure(resolver_factory):
 
 
 @pytest.mark.parametrize("payload", ["{", "[]", '{"version":2,"entries":{}}'])
-async def test_corrupt_cache_does_not_stop_queries(resolver_factory, payload, caplog):
+async def test_clear_overwrites_corrupt_cache_without_loading_it(resolver_factory, payload):
     resolver = resolver_factory(lambda request: httpx.Response(200, json=CHINA))
     resolver.path.write_text(payload)
-    await resolver.load()
+    await resolver.clear()
     assert not resolver.entries
-    assert "Could not load IPWhois cache" in caplog.text
+    assert json.loads(resolver.path.read_text())["entries"] == {}
     assert await resolver.resolve("8.8.8.8") == "浙江省 杭州"
 
 
-async def test_load_discards_expired_invalid_and_nonpublic_entries(resolver_factory):
+async def test_clear_discards_all_entries_and_cooldown(resolver_factory):
     resolver = resolver_factory(lambda request: httpx.Response(200, json=CHINA))
+    resolver.entries["8.8.8.8"] = Located(location="浙江省 杭州")
+    resolver.entries["8.8.4.4"] = Unavailable(retry_at=1700001000.0)
+    resolver.retry_after_until = 1700001000.0
+    resolver._next_request_at = 1700001000.0
     resolver.path.write_text(
         json.dumps(
             {
@@ -352,9 +474,12 @@ async def test_load_discards_expired_invalid_and_nonpublic_entries(resolver_fact
             }
         )
     )
-    await resolver.load()
-    assert list(resolver.entries) == ["8.8.8.8"]
+    await resolver.clear()
+    assert not resolver.entries
     assert resolver.retry_after_until is None
+    assert resolver._next_request_at is None
+    payload = json.loads(resolver.path.read_text())
+    assert payload["entries"] == {} and payload["retry_after_until"] is None
 
 
 async def test_failed_atomic_replace_preserves_old_file_and_can_retry(
@@ -369,7 +494,7 @@ async def test_failed_atomic_replace_preserves_old_file_and_can_retry(
         patch.setattr(location.aiofiles.os, "replace", AsyncMock(side_effect=PermissionError()))
         await resolver.save()
     assert resolver.path.read_bytes() == before
-    assert "Could not save IPWhois cache" in caplog.text
+    assert "Could not save location cache" in caplog.text
     assert "8.8.4.4" in resolver.entries
     await resolver.save()
     assert "8.8.4.4" in json.loads(resolver.path.read_text())["entries"]
@@ -436,4 +561,5 @@ async def test_cancelled_close_drains_writer_before_propagating(resolver_factory
 )
 def test_cache_entry_types_reject_illegal_states(entry):
     with pytest.raises(ValidationError):
-        location.ENTRY.validate_python(entry)
+        model = Located if entry["kind"] == "located" else Unavailable
+        model.model_validate(entry)

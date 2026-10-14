@@ -71,6 +71,19 @@
             }
         }
     },
+    "location": {
+        "description": "IP 地域查询",
+        "type": "object",
+        "items": {
+            "provider": {
+                "description": "查询服务",
+                "type": "string",
+                "default": "ipyou.net",
+                "options": ["ipyou.net", "IPWhois"],
+                "hint": "选择 IP 归属地查询服务。保存后重载插件生效，每次加载或重载都会清空地域缓存并重新查询。"
+            }
+        }
+    },
     "notification": {
         "description": "动态通知与查询权限",
         "type": "object",

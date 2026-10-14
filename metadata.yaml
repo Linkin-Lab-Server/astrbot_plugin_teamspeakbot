@@ -1,6 +1,6 @@
 name: astrbot_plugin_teamspeakbot
 display_name: Teamspeak Notifier
 desc: TeamSpeak 在线状态查询与状态变动合并通知
-version: v2.1.1
+version: v2.1.2
 author: Next-Page-Vi, plusls, Linkin-Lab-Server
 repo: https://github.com/Linkin-Lab-Server/astrbot_plugin_teamspeakbot
